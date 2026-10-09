@@ -1,5 +1,6 @@
 // Updates, the custom stage check and the program-version entry, in a made-up game folder; also renders a card
-// with an update tag. Usage: UpdateTest <real game folder> <scratch folder> <card.png>   (with all of src\)
+// with an update tag, WRITTEN to the third argument (a new .png, never one of the program's pictures).
+// Usage: UpdateTest <real game folder> <scratch folder> <card picture to write, .png>   (with all of src\)
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -67,6 +68,7 @@ namespace ExMoreStuff
         static void Main(string[] args)
         {
             string real = args[0], game = args[1];
+            if (!args[2].EndsWith(".png", StringComparison.OrdinalIgnoreCase)) { Console.WriteLine("the card picture is written to the third argument: give it a .png"); Environment.Exit(2); }
             if (Directory.Exists(game)) Directory.Delete(game, true);
             Directory.CreateDirectory(Path.Combine(game, "patch_ae2_tu3"));
             string packages = Path.Combine(game, "packages");
