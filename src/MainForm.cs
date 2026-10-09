@@ -144,7 +144,7 @@ namespace ExMoreStuff
                 view.Item1.Controls.Add(view.Item2);
                 view.Item1.Controls.Add(toolBar);
             }
-            packagesPage.Changed += Reload;
+            packagesPage.Changed += () => ReloadKeeping(null);   // a move or a delete there: the rest waiting for Apply stays
             packagesPage.Blocked = () => Pending() > 0 ? "apply or undo the other changes waiting first" : null;
             communityPage.Changed += Reload;
             communityPage.Blocked = () => Pending() > 0 ? "apply or undo the other changes waiting first" : null;
@@ -376,6 +376,22 @@ namespace ExMoreStuff
             tile.Invalidate();
         }
 
+        // Reload after one package changed (deleted, moved): the other changes waiting for Apply stay waiting.
+        void ReloadKeeping(string gone)
+        {
+            var keepWanted = wanted.Where(w => w.Key != gone).ToList();
+            var keepNames = wantedNames.Where(w => w.Key != gone).ToList();
+            var keepReplaced = wantedReplaced.ToList();
+            Reload();
+            foreach (var w in keepWanted) wanted[w.Key] = w.Value;
+            foreach (var n in keepNames) wantedNames[n.Key] = n.Value;
+            foreach (var r in keepReplaced) wantedReplaced[r.Key] = r.Value;
+            BuildRoster();
+            if (openFighter != null) ShowCostumes(openFighter);
+            BuildStages();
+            UpdateStatus();
+        }
+
         void Reload()
         {
             installed = Game.IsGameFolder(game) ? Installer.Load(game) : new List<Installed>();
@@ -573,6 +589,14 @@ namespace ExMoreStuff
                 card.ShowLink("Forget");
                 card.Link.LinkClicked += (s, e) => ForgetItem(item);
             }
+            // a package of the player's (their own, or built from a GameBanana mod): deleted for good from its card
+            Installed own = record ?? off;
+            if (own != null && own.Source == "file")
+            {
+                card.ShowTrash();
+                card.Trash.Click += async (s, e) => await DeleteItem(item);
+                tips.SetToolTip(card.Trash, "Delete it for good");
+            }
             // a mod from GameBanana: its card on Browse Mods, lit up
             Match mod = Regex.Match(item.Id ?? "", @"^(gamebanana:[^:]+:)");
             if (mod.Success)
@@ -581,10 +605,31 @@ namespace ExMoreStuff
                 string key = mod.Groups[1].Value;
                 card.Browse.LinkClicked += (s, e) => { ShowTab(communityTab); communityPage.Highlight(key); };
             }
-            new ToolTip().SetToolTip(card, off != null ? "Switch it on to add it again from " + off.Package
-                                                       : string.IsNullOrEmpty(item.Description) ? item.Title : item.Description);
+            tips.SetToolTip(card, off != null ? "Switch it on to add it again from " + off.Package
+                                              : string.IsNullOrEmpty(item.Description) ? item.Title : item.Description);
             var ignored = LoadPicture(item, card);
             return card;
+        }
+
+        // The trash can on a card: the package deleted for good (as in Package codes), whatever else is waiting for Apply.
+        async Task DeleteItem(Item item)
+        {
+            Installed record = installed.FirstOrDefault(r => r.Item.Key == item.Key) ?? RemovedRecord(item.Key);
+            if (record == null || !GameClosed()) return;
+            if (MessageBox.Show(this, PackagesPanel.DeleteQuestion(game, record, Describe(item)), Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) return;
+            bool recycle = PackagesPanel.RecyclesZip(game, record);
+            string g = game, note = null;
+            PageWorking(true);
+            try
+            {
+                note = await Task.Run(() => PackagesPanel.PurgeForGood(g, record));
+                if (recycle) PackagesPanel.RecycleZip(record.Package);
+            }
+            catch (Exception ex) { MessageBox.Show(this, "It wasn't all deleted: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            finally { PageWorking(false); }
+            ReloadKeeping(item.Key);
+            UpdateStatus(Describe(item) + " is deleted");
+            if (note != null) MessageBox.Show(this, note, Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         // A removed package of the player's off the list (its zip stays where it is).

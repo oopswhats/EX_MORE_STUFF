@@ -108,37 +108,54 @@ namespace ExMoreStuff
             return row;
         }
 
-        // Gone for good: out of the game and off the lists (a stage's Music-page songs given back too); its zip to the
-        // Recycle Bin, unless another package still uses it.
-        async Task Delete(Installed record, PackageRow row)
+        // Gone for good (here, and from the trash can on its card): out of the game and off the lists (a stage's
+        // Music-page songs given back too); its zip to the Recycle Bin, unless it isn't where it was or another package
+        // still uses it. Other changes waiting for Apply stay waiting.
+        public static bool RecyclesZip(string game, Installed record)
+        {
+            bool shared = Installer.Load(game).Concat(Installer.Removed(game))
+                .Any(r => r.Item.Key != record.Item.Key && string.Equals(r.Package, record.Package, StringComparison.OrdinalIgnoreCase));
+            return !string.IsNullOrEmpty(record.Package) && File.Exists(record.Package) && !shared;
+        }
+
+        public static string DeleteQuestion(string game, Installed record, string title)
         {
             Item item = record.Item;
-            string blocked = Blocked != null ? Blocked() : null;
-            if (blocked == null && Game.IsRunning()) blocked = "close the game first";
-            if (blocked != null) { Say("Can't delete it: " + blocked, true); return; }
-            var all = Installer.Load(game).Concat(Installer.Removed(game)).ToList();
-            bool inGame = Installer.Load(game).Any(r => r.Item.Key == item.Key);
-            bool shared = all.Any(r => r.Item.Key != item.Key && string.Equals(r.Package, record.Package, StringComparison.OrdinalIgnoreCase));
-            bool recycle = !string.IsNullOrEmpty(record.Package) && File.Exists(record.Package) && !shared;
-            if (MessageBox.Show(FindForm(), "Delete " + row.Title + " for good?\n\n" +
-                    (inGame ? "It's taken out of the game and off EX More Stuff's lists" : "It's taken off EX More Stuff's lists") +
-                    (item.IsStage ? ", with any songs you put on " + item.Code + " on the Music page" : "") + ".\n" +
-                    (recycle ? "Its zip (" + Path.GetFileName(record.Package) + ") goes to the Recycle Bin." : shared ? "Its zip stays: another package uses it." : ""),
-                    "EX More Stuff", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) return;
+            bool inGame = Installer.Load(game).Any(r => r.Item.Key == item.Key), recycle = RecyclesZip(game, record);
+            bool kept = !recycle && !string.IsNullOrEmpty(record.Package);
+            return "Delete " + title + " for good?\n\n" +
+                   (inGame ? "It's taken out of the game and off EX More Stuff's lists" : "It's taken off EX More Stuff's lists") +
+                   (item.IsStage ? ", with any songs you put on " + item.Code + " on the Music page" : "") + ".\n" +
+                   (recycle ? "Its zip (" + Path.GetFileName(record.Package) + ") goes to the Recycle Bin." :
+                    kept && File.Exists(record.Package) ? "Its zip stays: another package uses it." : kept ? "Its zip isn't where it was, so nothing else is touched." : "");
+        }
+
+        /// <summary>The deleting itself, off the window's thread (the zip goes after, with RecycleZip). A note on songs, or null.</summary>
+        public static string PurgeForGood(string game, Installed record)
+        {
+            Installer.Purge(game, record.Item.Key);
+            string songs = record.Item.IsStage ? MusicBank.RemoveCode(game, record.Item.Code) : null;
+            RoundMod.RemoveIfUnused(game);
+            return songs;
+        }
+
+        public static void RecycleZip(string path)
+        {
+            Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+        }
+
+        async Task Delete(Installed record, PackageRow row)
+        {
+            if (Game.IsRunning()) { Say("Can't delete it: close the game first", true); return; }
+            if (MessageBox.Show(FindForm(), DeleteQuestion(game, record, row.Title), "EX More Stuff", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) return;
+            bool recycle = RecyclesZip(game, record);
             Busy(true);
             string g = game, note = null;
             try
             {
-                note = await Task.Run(() =>
-                {
-                    Installer.Purge(g, item.Key);
-                    string songs = item.IsStage ? MusicBank.RemoveCode(g, item.Code) : null;
-                    RoundMod.RemoveIfUnused(g);
-                    return songs;
-                });
-                if (recycle)
-                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(record.Package, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                note = await Task.Run(() => PurgeForGood(g, record));
+                if (recycle) RecycleZip(record.Package);
             }
             catch (Exception ex) { Say("It wasn't all deleted: " + ex.Message, true); return; }
             finally

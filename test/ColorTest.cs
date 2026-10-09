@@ -104,8 +104,15 @@ namespace ExMoreStuff
                   File.ReadAllText(Path.Combine(ryu, "RYU_01_35.txt")) == "Navy", "in the game as color 35, its name kept");
 
             Console.WriteLine("Delete");
-            Installer.Purge(game, "color:RYU:1:35");
-            Check(!File.Exists(Path.Combine(ryu, "RYU_01_35.col.emb")) && !Installer.Load(game).Any(r => r.Item.Key == "color:RYU:1:35"), "out of the game and off the list");
+            navy = Installer.Load(game).Single(r => r.Item.Key == "color:RYU:1:35");
+            Check(PackagesPanel.RecyclesZip(game, navy) && PackagesPanel.DeleteQuestion(game, navy, "Navy").Contains("goes to the Recycle Bin"), "its zip would go to the Recycle Bin");
+            string movedZip = Path.Combine(args[1], "moved.zip");
+            File.Move(zip, movedZip);
+            Check(!PackagesPanel.RecyclesZip(game, navy) && PackagesPanel.DeleteQuestion(game, navy, "Navy").Contains("isn't where it was"), "a moved zip is left alone, and the question says so");
+            PackagesPanel.PurgeForGood(game, navy);
+            Check(!File.Exists(Path.Combine(ryu, "RYU_01_35.col.emb")) && !File.Exists(Path.Combine(ryu, "RYU_01_35.txt")) &&
+                  !Installer.Load(game).Any(r => r.Item.Key == "color:RYU:1:35") && File.Exists(movedZip), "out of the game (its name file too) and off the list; the moved zip kept");
+            Check(File.Exists(Path.Combine(ryu, "RYU_01_31.col.emb")), "the other color stays");
 
             Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");
             Environment.Exit(failures == 0 ? 0 : 1);

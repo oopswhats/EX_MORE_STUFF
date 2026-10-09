@@ -467,6 +467,9 @@ namespace ExMoreStuff
         public readonly LinkLabel Browse = new LinkLabel { Text = "Browse Mods", AutoSize = true, BackColor = Color.Transparent, Font = Theme.Font(9f), Visible = false,
                                                            LinkColor = Theme.Accent, ActiveLinkColor = Theme.AccentHover, LinkBehavior = LinkBehavior.HoverUnderline };
 
+        // A package that can be deleted for good: a trash can at the bottom right, the links to its left.
+        public readonly TrashButton Trash = new TrashButton { Visible = false };
+
         public ItemCard()
         {
             Size = new Size(286, 262);
@@ -474,20 +477,20 @@ namespace ExMoreStuff
             Controls.Add(Use);
             Controls.Add(Link);
             Controls.Add(Browse);
+            Controls.Add(Trash);
         }
 
-        public void ShowLink(string text)
-        {
-            Link.Text = text;
-            Link.Location = new Point(Width - Link.PreferredWidth - 16, Height - 31);
-            Link.Visible = true;
-        }
+        public void ShowLink(string text) { Link.Text = text; Link.Visible = true; Arrange(); }
+        public void ShowBrowse() { Browse.Visible = true; Arrange(); }
+        public void ShowTrash() { Trash.Visible = true; Arrange(); }
 
-        public void ShowBrowse()
+        // right to left: the trash can, the link, Browse Mods
+        void Arrange()
         {
-            int right = Link.Visible ? Link.Left - 14 : Width - 16;
-            Browse.Location = new Point(right - Browse.PreferredWidth, Height - 31);
-            Browse.Visible = true;
+            int right = Width - 14;
+            if (Trash.Visible) { Trash.Location = new Point(right - Trash.Width, Height - 34); right = Trash.Left - 8; }
+            if (Link.Visible) { Link.Location = new Point(right - Link.PreferredWidth, Height - 31); right = Link.Left - 12; }
+            if (Browse.Visible) Browse.Location = new Point(right - Browse.PreferredWidth, Height - 31);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -520,6 +523,24 @@ namespace ExMoreStuff
             Theme.Draw(g, Detail, Theme.Font(8.5f), Theme.Muted, new Rectangle(14, 181, Width - 28, 18), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             if (!string.IsNullOrEmpty(Note))
                 Theme.Draw(g, Note, Theme.Font(8.5f), Theme.Muted, new Rectangle(14, 199, Width - 28, 18), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        }
+    }
+
+    // A small trash can (Segoe MDL2 Assets' Delete glyph, in every Windows 10 and 11): muted, orange-red under the pointer.
+    class TrashButton : Clear
+    {
+        static readonly Font Glyph = new Font("Segoe MDL2 Assets", 11f);
+        bool hover;
+
+        public TrashButton() { Size = new Size(22, 22); Cursor = Cursors.Hand; }
+
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Theme.Draw(e.Graphics, "\uE74D", Glyph, !Enabled ? Theme.Off : hover ? Theme.Warning : Theme.Muted, ClientRectangle,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
         }
     }
 
@@ -785,7 +806,7 @@ namespace ExMoreStuff
                 x += TextRenderer.MeasureText(g, part.Item1, font, Size.Empty, flags).Width;
             }
             Theme.Draw(g, "Round 2 and 3 music plays with Tom's Round BGM mod", Theme.Font(9f), Theme.Muted, new Rectangle(143, 138, Width - 160, 18), flags);
-            Theme.Draw(g, "GameBanana files are verified safe: virus-scanned by GameBanana, checked on download, and only costume files are used.",
+            Theme.Draw(g, "GameBanana files are verified safe: virus-scanned by GameBanana, checked on download, and only costume and stage files are used.",
                 Theme.Font(8f), Theme.Muted, new Rectangle(143, 162, Width - 160, 34), flags | TextFormatFlags.WordBreak);
         }
     }
