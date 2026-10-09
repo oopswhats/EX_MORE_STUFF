@@ -1,6 +1,6 @@
 # EX More Stuff
 
-New costumes and stages for **Ultra Street Fighter IV** (Steam). They go into new slots, so the game's own costumes and stages are never overwritten.
+New costumes, stages and music for **Ultra Street Fighter IV** (Steam). Costumes and stages go into new slots, so the game's own are never overwritten; songs replace a stage's or fighter's theme on your PC until you give it back.
 
 ## Download
 
@@ -11,20 +11,37 @@ Get the latest `EXMoreStuff-<version>.zip` from [Releases](../../releases), unzi
 1. It finds your Steam copy of USFIV, or asks for its folder.
 2. **Costumes:** click a fighter and switch on the costumes you want.
 3. **Stages:** switch on custom stages. You can also click one of the game's stages to replace it with another one, on your PC only.
-4. Click **Apply changes**, then close the program. The game has to be closed while changes are applied.
+4. **Browse Mods:** USF4's skins and stages on GameBanana, made and shared for free by its modders, with their pictures; each modder's name, in gold, opens the mod's page (thank them there). Search, **Stages**, **Character** (every fighter with their portrait) and the sorts (**Newest** / **Oldest**, **Most** / **Least Downloaded**) narrow and order them.
+   - **Install** downloads one and puts it in as a costume or stage of its own, built with your own game's files, so the game's own stay as they are. Each skin goes in the same code for everyone who has it (shown on its card), so players see it on each other; a skin's versions become its colors.
+   - Only files that passed GameBanana's virus scan are offered, each download is checked against GameBanana's MD5, and only the game's costume and stage files and pictures are taken out of it: nothing in a mod is ever run.
+   - When a modder uploads a new version, its card says **Update** (otherwise **Installed**), a purple dot shows on the tab, and **Updates** lists them with **Update all**, one at a time.
+   - An installed mod's card on the Costumes or Stages tab has a **Browse Mods** link back to it.
+5. **Advanced** (tools most players never need):
+   - **Add Mod From File:** a `.zip`, `.rar` or `.7z` you have. A package made for EX More Stuff goes in as it is; a skin or stage made over one of the game's own (downloaded from anywhere) is built into a seat of its own with your game's files, which only you see; a new color (`<FIGHTER>_<NN>_<CC>`, 30-99) goes in beside its costume, in its own number or the next free one.
+   - **Music:** pick a stage or fighter on the left, open a song (WAV, MP3, FLAC, M4A, WMA, or a game theme's `.csb`) and set where it loops. The program suggests a loop when the song opens (**Find the loop** asks again). Drag the green loop start and orange loop end on the waveform, zoom with the mouse wheel (down to single samples), scroll with a right-button drag. **Test the loop** plays the last seconds before the loop end and the jump back, over and over. **Hear it as in game** (on by default) plays at the level the game mixes that music at (about 9 dB down for a stage's main layer), so the editor sounds like a match. **Volume** sets it louder or quieter on top of matching the game's volume. **Put in the game** writes it right away (no Apply needed); **Give back the game's music** takes it off. **Save...** keeps the song with its loop and settings as a WAV (open it again later to put it in), or saves the game file it makes. MP3, FLAC, M4A and WMA use Windows' own decoders (the "N" editions of Windows need Microsoft's free Media Feature Pack for them); OGG isn't supported: convert it first.
+     - A stage's music has three layers the game fades between: **Main**, **Ultra** (both players have half their Ultra gauge) and **Low health** (the timer is at 15 or someone's health is low). By default all three play your song; low health can instead play it with the bass cut (in step with the song), its own song, or the game's.
+     - **Round** 2 and 3 songs go in `BGM_<stage>2.csb` and `BGM_<stage>3.csb`, which play with Tom's Round BGM mod: EX More Stuff puts it in for you (`dinput8.dll` next to `SSFIV.exe`) with the first round 2 or 3 music and takes it out when none is left. It never replaces another mod's `dinput8.dll`. Fighter themes have one layer and play every round.
+   - **Package codes:** your own packages, in the game or switched off. **Delete** takes one out of the game and off the lists for good (a stage's Music-page songs too) and puts its zip in the Recycle Bin, unless another package uses that zip. Change a stage's code, a costume's slot or a new color's number there and its zip is rewritten with it (a stage's files are re-coded inside), ready to share; if it's in the game it goes in again under the new code, keeping its name, and songs you put on that stage move with it.
+   - **Disk space:** how much room your costumes, stages and songs take altogether, and each one, biggest first.
+   - **Free codes:** making a costume or stage to share on GameBanana? Pick a fighter to see their seats 8-99 at a glance (free, taken on GameBanana, not free), or check a slot or stage code. A code the game has, one a GameBanana mod already uses, or one that isn't free gets a warning (also when you change a code in Package codes or add a package): you can still use it, but others may have something there.
+6. Click **Apply changes**, then close the program. The game has to be closed while changes are applied.
 
-Switching something off and applying removes it again. **Remove everything** puts the game back the way it was.
+Switching something off and applying removes its files again; it stays listed. **Disable everything** switches all costumes and stages off and puts back the game stages you replaced. Songs are given back one by one on the Music page (**Give back the game's music**).
 
 ## What it changes
 
-- Custom costumes and stages get their own new files in the game's `patch_ae2_tu3` folder: costumes are slots 8 to 99 (`RYU_12.obj.emo` ...), stages `STG_C01` to `STG_C99`. It never writes over a file it didn't install.
+- Custom costumes and stages get their own new files in the game's `patch_ae2_tu3` folder: costumes are slots 8 to 99 (`RYU_12.obj.emo` ...), stages have a three-character code of their own (`STG_C12.emz`, `STG_D05.emz` ...). It never writes over a file it didn't install.
 - A replaced game stage is a converted copy of the other stage put in its place. A file that was already there is moved to `patch_ae2_tu3\ex_more_stuff_backup` and comes back when the replacement is switched off.
+- A song becomes the game's own sound format (CRI ADX in a `.csb` bank, 44.1 kHz stereo), built on the slot's game bank so its other sounds and volume settings stay: stage themes are `BGM_<stage>.csb` (all three layers, see above), fighter themes `BGM_<fighter>_2CH.csb`. It goes into `patch_ae2_tu3\battle\sound\bgm`; a file already there is moved to `ex_more_stuff_backup` and comes back when the song is taken off. `patch_ae2_tu3\ex_more_stuff_music.json` lists the songs put in.
 - Downloads are checked against the catalog's size and SHA-256 before anything is unpacked.
-- The program only reads the catalog in this repository and the downloads it lists. It doesn't update itself: when a new version is out, it shows a link to this page.
+- Skins and stages from the Browse Mods tab are built into a zip of your own in `patch_ae2_tu3\ex_more_stuff_mods` and installed like any package of yours (rename, Package codes, Delete).
+- The program only reads the catalog in this repository, the downloads it lists, and GameBanana's USF4 mods (Browse Mods, Free codes). GameBanana's list (names, files, their links and checksums, never the mods) is kept in `%AppData%\EX More Stuff\gamebanana.json` each time it's read, and a copy comes built into the program, so Browse Mods and Free codes still work when GameBanana can't be reached (installing still needs it). It doesn't update itself: when a new version is out, it shows a link to this page.
 
 ## Playing online
 
 Custom costumes and stages show up in EMBER builds with custom content support (not yet the official EMBER). Nothing extra is sent over the network. A player who doesn't have your costume sees the fighter's original costume, and a custom stage they don't have shows as one of the game's stages. A replaced stage is only on your PC: your opponent sees their own.
+
+Codes are what players share. GameBanana itself is the list of who has which: the skins from before EX More Stuff (each replaces one of the game's costumes) were each given one code, once (slot 8 up per fighter, oldest first); a newer mod made in a code of its own (`BLK_23.obj.emo` ...) has that code, read from GameBanana's list of what's in its files, and if two use the same one, the first uploaded keeps it. Making a skin or stage to share? Use a code nobody uses yet: a costume slot from 8 to 84 (85 to 99 aren't free), a stage code that isn't one A or T with two digits (A12, 1A2, 12A, T12, 1T2, 12T aren't free). A skin without a shared code goes in a free seat on your PC, counting down from 84, which only you see. Stages work the same way: the GameBanana stages from before EX More Stuff were each given a `B##` code once (The Retrowave Zone is `B01`), a newer one made in a code of its own has that code, and a stage without a shared code goes in `C80` to `C99` on your PC. **Advanced > Free codes** shows what's free.
 
 ## The catalog
 
@@ -41,23 +58,31 @@ Custom costumes and stages show up in EMBER builds with custom content support (
       "picture": "pictures/ryu-12-example.png",
       "download": "https://github.com/oopswhats/EX_MORE_STUFF/releases/download/content/ryu-12-example.zip",
       "sha256": "...", "size": 12345678
+    },
+    {
+      "id": "stage-c12-example", "type": "stage", "code": "C12", "name": "Example stage", "...": "..."
     }
   ]
 }
 ```
 
-The catalog uses costume slots 8 to 70 and stage numbers 1 to 70; 71 to 99 are left for players' own packages (**Add from file**). A package is a zip with its files side by side, no folders:
+**Costumes** are numbered: the game names their files with two digits, so slots 8 to 99 are all there is. Shared mods (GameBanana's, this catalog's) use 8 to 84; 85 to 99 aren't free. **Advanced > Add Mod From File** takes any slot, but stops at files of that slot it didn't install itself.
 
-- **costume:** `<FIGHTER>_<NN>.obj.emo` and `.nml.emb`, ten colours `<FIGHTER>_<NN>_01` to `_10` `.col.emb` and `.obj.emm`; optionally `.shd.emo`, `.bsr`, `.csb` and a picture per colour `<FIGHTER>_<NN>_01.png` ...
-- **stage:** `STG_C<NN>.emz`, `STG_C<NN>.tex.emz` and a picture `STG_C<NN>.png`. Its scripts must not change the floor height, turn area or bonus collisions, or players without it would play a different match (the program checks).
+**Stages** have a code: any three capital letters or digits that aren't one of the game's own codes. EMBER sends the code itself as the stage's number, so every catalog can use letters of its own. This catalog owns `C01` to `C99`; any other code (`D05`, `X99`, `ZZZ` ...) is free for players' own packages and other people's catalogs, except codes of one A or T with two digits (`A12`, `1A2`, `12A`, `T12`, `1T2`, `12T`), which aren't free (Add Mod From File takes any code, catalog ones included). A player who doesn't have a stage sees a game stage chosen by rule: by the code's number (`C12` and `D12` alike), or for other codes by their letters.
+
+A package is a zip with its files side by side, no folders:
+
+- **costume:** `<FIGHTER>_<NN>.obj.emo` and `.nml.emb`, ten colors `<FIGHTER>_<NN>_01` to `_10` `.col.emb` and `.obj.emm`; optionally `.shd.emo`, `.bsr`, `.csb` and a picture per color `<FIGHTER>_<NN>_01.png` ...
+- **new color** of any costume, the game's (`01`-`07`) or a custom one: `<FIGHTER>_<NN>_<CC>.col.emb` and `.obj.emm`, `CC` 30 to 99, and a picture `<FIGHTER>_<NN>_<CC>.png` (Ember shows it on the color's card; 256 x 384 like Ember's own). Ember lists it after the costume's own colors; a player without it sees the costume's color 1. New colors aren't shared, so any free number will do.
+- **stage:** `STG_<code>.emz`, `STG_<code>.tex.emz` and a picture `STG_<code>.png`; optionally its own music `BGM_<code>.csb`, and `BGM_<code>2.csb` / `BGM_<code>3.csb` for rounds 2 and 3 (a CRI sound bank laid out like the game's stage themes, with 3 cues; without it the stage plays its stand-in stage's music). Its scripts must not change the floor height, turn area or bonus collisions, or players without it would play a different match (the program checks).
 
 ## Building
 
-`build.bat` compiles `out\EXMoreStuff.exe` with the C# compiler of the Visual Studio 2019 Build Tools, against the .NET Framework 4.8 that comes with Windows; no other libraries. `make_assets.ps1` rebuilds the images in `res\` from `art\`.
+`build.bat` compiles `out\EXMoreStuff.exe` with the C# compiler of the Visual Studio 2019 Build Tools, against the .NET Framework 4.8 that comes with Windows; no other libraries. `make_assets.ps1` rebuilds the images in `res\` from `art\`. The tests in `test\` build with `test\build_test.bat <Name>` (each file's first lines say how to run it). Before a release, refresh GameBanana's built-in list with `test\GameBananaSnapshot.cs` (`res\gamebanana.json`).
 
 ## Credits
 
-Made by Claude and oops. The game stage pictures come from EMBER. Street Fighter is Capcom's; this project isn't affiliated with Capcom.
+Made by Claude and oops. The game stage pictures come from EMBER. The mods on Browse Mods are their modders' own, shared on GameBanana. Street Fighter is Capcom's; this project isn't affiliated with Capcom.
 
 ## License
 

@@ -205,16 +205,29 @@ namespace ExMoreStuff
     // A header tab: the open page is bright with an orange line under it.
     class TabButton : Clear
     {
-        bool selected, hover;
+        bool selected, hover, dot;
         public bool Selected { get { return selected; } set { selected = value; Invalidate(); } }
+        static readonly Color Purple = Color.FromArgb(182, 108, 255);
+        readonly System.Windows.Forms.Timer pulse = new System.Windows.Forms.Timer { Interval = 50 };
+
+        /// <summary>A little purple glowing dot at the top right of the word, breathing slowly: something's new there
+        /// (Browse Mods: updates for installed mods).</summary>
+        public bool Dot
+        {
+            get { return dot; }
+            set { dot = value; if (dot) pulse.Start(); else pulse.Stop(); Invalidate(); }
+        }
 
         public TabButton(string text)
         {
             Text = text;
             Font = Theme.Bold(11f);
             Cursor = Cursors.Hand;
-            Size = new Size(TextRenderer.MeasureText(text, Font).Width + 28, 44);
+            Size = new Size(TextRenderer.MeasureText(text, Font).Width + 18, 44);
+            pulse.Tick += (s, e) => Invalidate();
         }
+
+        protected override void Dispose(bool disposing) { if (disposing) pulse.Dispose(); base.Dispose(disposing); }
 
         protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
@@ -228,6 +241,20 @@ namespace ExMoreStuff
                 using (var path = Theme.Rounded(new RectangleF(12, Height - 5, Width - 24, 3), 1.5f))
                 using (var brush = new SolidBrush(Theme.Accent))
                     e.Graphics.FillPath(brush, path);
+            if (!dot) return;
+            // the dot sits on the word's top right corner; its glow swells and fades over two seconds
+            Size word = TextRenderer.MeasureText(Text, Font);
+            var center = new PointF((Width + word.Width) / 2f - 1, (Height - 6 - word.Height) / 2f + 3);
+            double breath = (Math.Sin(Environment.TickCount / 2000.0 * 2 * Math.PI) + 1) / 2;
+            float glow = 6.5f + (float)breath * 2f;
+            using (var halo = new GraphicsPath())
+            {
+                halo.AddEllipse(center.X - glow, center.Y - glow, glow * 2, glow * 2);
+                using (var brush = new PathGradientBrush(halo) { CenterColor = Color.FromArgb((int)(110 + 90 * breath), Purple), SurroundColors = new[] { Color.FromArgb(0, Purple) } })
+                    e.Graphics.FillPath(brush, halo);
+            }
+            using (var brush = new SolidBrush(Purple)) e.Graphics.FillEllipse(brush, center.X - 3.5f, center.Y - 3.5f, 7, 7);
+            using (var brush = new SolidBrush(Color.FromArgb(200, 240, 225, 255))) e.Graphics.FillEllipse(brush, center.X - 1.6f, center.Y - 2.2f, 2.4f, 2.4f);
         }
     }
 
@@ -243,7 +270,8 @@ namespace ExMoreStuff
             Text = text;
             Font = Theme.Bold(9f);
             Cursor = Cursors.Hand;
-            Size = new Size(140, 24);
+            // as wide as its switch and word, so it can't cover a link beside it
+            Size = new Size(46 + TextRenderer.MeasureText(text, Font).Width + 6, 24);
         }
 
         protected override void OnClick(EventArgs e) { if (Enabled) Checked = !Checked; base.OnClick(e); }
@@ -267,12 +295,62 @@ namespace ExMoreStuff
     // switched off, on the right in green how many are on (no bubble for none).
     class FighterTile : Clear
     {
-        public Image Portrait;
         public string FighterName;
         public int Inactive, Active;
         bool hover;
+        Image portrait;
+        Bitmap scaled;          // the portrait at the tile's size, made once (not scaled again on every paint)
+        float seen = 1;         // how much of the portrait shows: it fades in when it arrives
+        // one timer for every tile's fade
+        static readonly System.Windows.Forms.Timer fading = new System.Windows.Forms.Timer { Interval = 15 };
+        static readonly List<FighterTile> fadingTiles = new List<FighterTile>();
+
+        static FighterTile()
+        {
+            fading.Tick += (s, e) =>
+            {
+                foreach (FighterTile tile in fadingTiles.ToArray())
+                {
+                    tile.seen = Math.Min(1, tile.seen + 0.08f);
+                    if (tile.seen >= 1 || tile.IsDisposed) fadingTiles.Remove(tile);
+                    if (!tile.IsDisposed) tile.Invalidate();
+                }
+                if (fadingTiles.Count == 0) fading.Stop();
+            };
+        }
 
         public FighterTile() { Cursor = Cursors.Hand; }
+
+        public Image Portrait
+        {
+            get { return portrait; }
+            set
+            {
+                if (value == portrait) return;
+                bool first = portrait == null;
+                portrait = value;
+                Forget();
+                if (value != null && first) FadeIn();
+                Invalidate();
+            }
+        }
+
+        void FadeIn()
+        {
+            seen = 0;
+            if (!fadingTiles.Contains(this)) fadingTiles.Add(this);
+            fading.Start();
+        }
+
+        void Forget() { if (scaled != null) { scaled.Dispose(); scaled = null; } }
+
+        protected override void OnResize(EventArgs e) { Forget(); base.OnResize(e); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { Forget(); fadingTiles.Remove(this); }
+            base.Dispose(disposing);
+        }
 
         protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
@@ -286,12 +364,30 @@ namespace ExMoreStuff
             {
                 using (var fill = new SolidBrush(hover ? Theme.TileHover : Theme.Tile)) g.FillPath(fill, path);
                 g.SetClip(path);
-                if (Portrait != null)
+                if (portrait != null && Width > 6 && Height > 10)
                 {
                     // Larger than fitting whole (the sides may be cut), standing on the name.
-                    float fit = Math.Min((Width - 6f) / Portrait.Width, (Height - 10f) / Portrait.Height);
-                    float scale = Math.Min(fit * 1.4f, (Height - 10f) / Portrait.Height), w = Portrait.Width * scale, h = Portrait.Height * scale;
-                    g.DrawImage(Portrait, (Width - w) / 2, Height - 6 - h, w, h);
+                    float fit = Math.Min((Width - 6f) / portrait.Width, (Height - 10f) / portrait.Height);
+                    float scale = Math.Min(fit * 1.4f, (Height - 10f) / portrait.Height);
+                    int w = Math.Max(1, (int)(portrait.Width * scale)), h = Math.Max(1, (int)(portrait.Height * scale));
+                    if (scaled == null)
+                    {
+                        scaled = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+                        using (Graphics s = Graphics.FromImage(scaled))
+                        {
+                            s.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                            s.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                            s.DrawImage(portrait, 0, 0, w, h);
+                        }
+                    }
+                    var at = new Rectangle((Width - w) / 2, Height - 6 - h, w, h);
+                    if (seen >= 1) g.DrawImage(scaled, at.X, at.Y, w, h);
+                    else
+                        using (var attributes = new ImageAttributes())
+                        {
+                            attributes.SetColorMatrix(new ColorMatrix { Matrix33 = seen });
+                            g.DrawImage(scaled, at, 0, 0, w, h, GraphicsUnit.Pixel, attributes);
+                        }
                 }
                 var shade = new RectangleF(0, Height * 0.55f, Width, Height * 0.45f + 1);
                 using (var brush = new LinearGradientBrush(shade, Color.FromArgb(0, Theme.Well), Color.FromArgb(235, Theme.Well), LinearGradientMode.Vertical))
@@ -323,6 +419,39 @@ namespace ExMoreStuff
         }
     }
 
+    // A tool on the Advanced page: a clickable card with a symbol, its name and what it's for.
+    class ToolCard : Clear
+    {
+        public string Symbol, Title, Detail;
+        bool hover;
+        static readonly Font SymbolFont = new Font("Segoe UI Symbol", 22f);
+
+        public ToolCard() { Cursor = Cursors.Hand; Size = new Size(380, 112); }
+
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            Smooth(g);
+            using (var path = Theme.Rounded(new RectangleF(1, 1, Width - 3, Height - 3), 10))
+            {
+                using (var fill = new SolidBrush(hover ? Theme.TileHover : Theme.Card)) g.FillPath(fill, path);
+                using (var pen = new Pen(hover ? Theme.Accent : Theme.Line, hover ? 2f : 1f)) g.DrawPath(pen, path);
+            }
+            var badge = new RectangleF(18, 18, 54, 54);
+            using (var path = Theme.Rounded(badge, 12))
+            using (var brush = new SolidBrush(Color.FromArgb(40, Theme.Accent))) g.FillPath(brush, path);
+            const TextFormatFlags centred = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding;
+            Theme.Draw(g, Symbol, SymbolFont, Theme.Accent, Rectangle.Round(badge), centred);
+            Theme.Draw(g, Title, Theme.Bold(13f), hover ? Theme.AccentHover : Theme.Text, new Rectangle(88, 14, Width - 104, 30),
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            Theme.Draw(g, Detail, Theme.Font(9f), Theme.Muted, new Rectangle(88, 46, Width - 104, Height - 54),
+                TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak);
+        }
+    }
+
     // A costume or stage from the catalog (or a player's own): picture, name, details, and its on/off switch.
     class ItemCard : Clear
     {
@@ -330,12 +459,35 @@ namespace ExMoreStuff
         public string Title, Detail, Note;
         public string Badge;                 // a green tag on the picture ("Update to 1.1")
         public readonly Toggle Use = new Toggle("Use");
+        // A link at the bottom right ("Rename", "Forget"), hidden until ShowLink.
+        public readonly LinkLabel Link = new LinkLabel { AutoSize = true, BackColor = Color.Transparent, Font = Theme.Font(9f), Visible = false,
+                                                         LinkColor = Theme.Accent, ActiveLinkColor = Theme.AccentHover, LinkBehavior = LinkBehavior.HoverUnderline };
+
+        // A mod from GameBanana or DeviantArt: a link to its card on Browse Mods, left of the other link.
+        public readonly LinkLabel Browse = new LinkLabel { Text = "Browse Mods", AutoSize = true, BackColor = Color.Transparent, Font = Theme.Font(9f), Visible = false,
+                                                           LinkColor = Theme.Accent, ActiveLinkColor = Theme.AccentHover, LinkBehavior = LinkBehavior.HoverUnderline };
 
         public ItemCard()
         {
             Size = new Size(286, 262);
             Use.Location = new Point(14, Height - 36);
             Controls.Add(Use);
+            Controls.Add(Link);
+            Controls.Add(Browse);
+        }
+
+        public void ShowLink(string text)
+        {
+            Link.Text = text;
+            Link.Location = new Point(Width - Link.PreferredWidth - 16, Height - 31);
+            Link.Visible = true;
+        }
+
+        public void ShowBrowse()
+        {
+            int right = Link.Visible ? Link.Left - 14 : Width - 16;
+            Browse.Location = new Point(right - Browse.PreferredWidth, Height - 31);
+            Browse.Visible = true;
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -387,6 +539,196 @@ namespace ExMoreStuff
     }
 
     // A heading inside a list, with a hairline running on from it.
+    // A modder's name, in gold with a light sweeping across it now and then: respect to the people who made the mods.
+    // Clicking it opens the mod's page. One timer drives every name on screen, and only while a sweep is passing.
+    class GoldName : Clear
+    {
+        public string Link;
+        static readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer { Interval = 30 };
+        static readonly List<GoldName> shown = new List<GoldName>();
+        const int Cycle = 3600, Sweep = 900;   // ms: a sweep every 3.6 s, taking 0.9 s
+        static bool sweeping;
+        bool hover;
+
+        static GoldName()
+        {
+            timer.Tick += (s, e) =>
+            {
+                bool now = Environment.TickCount % Cycle < Sweep;
+                if (!now && !sweeping) return;
+                sweeping = now;
+                foreach (GoldName name in shown) if (name.Visible) name.Invalidate();
+            };
+            timer.Start();
+        }
+
+        public GoldName(string text)
+        {
+            Text = text;
+            Font = Theme.Bold(11.5f);
+            Cursor = Cursors.Hand;
+            Size = new Size(TextRenderer.MeasureText(text, Font).Width + 2, 24);
+        }
+
+        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); shown.Add(this); }
+        protected override void OnHandleDestroyed(EventArgs e) { shown.Remove(this); base.OnHandleDestroyed(e); }
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnClick(EventArgs e)
+        {
+            base.OnClick(e);
+            if (!string.IsNullOrEmpty(Link)) try { System.Diagnostics.Process.Start(Link); } catch (Exception) { }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            Smooth(g);
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+            using (var path = new GraphicsPath())
+            {
+                float size = g.DpiY * Font.SizeInPoints / 72f;
+                path.AddString(Text, Font.FontFamily, (int)Font.Style, size, new PointF(0, 1), StringFormat.GenericTypographic);
+                var box = new RectangleF(0, 0, Width, Height);
+                // gold: bright on top, deeper below
+                using (var gold = new LinearGradientBrush(box, Color.FromArgb(255, 236, 160), Color.FromArgb(214, 158, 36), LinearGradientMode.Vertical))
+                    g.FillPath(gold, path);
+                // the shine: a soft white band crossing the name at a slant
+                int t = Environment.TickCount % Cycle;
+                if (t < Sweep)
+                {
+                    float x = -40 + (Width + 80) * t / (float)Sweep;
+                    var band = new RectangleF(x - 20, 0, 40, Height);
+                    using (var shine = new LinearGradientBrush(band, Color.Transparent, Color.Transparent, 20f))
+                    {
+                        shine.InterpolationColors = new ColorBlend
+                        {
+                            Colors = new[] { Color.FromArgb(0, 255, 255, 255), Color.FromArgb(230, 255, 255, 240), Color.FromArgb(0, 255, 255, 255) },
+                            Positions = new[] { 0f, 0.5f, 1f },
+                        };
+                        g.SetClip(path);
+                        g.FillRectangle(shine, band);
+                        g.ResetClip();
+                    }
+                }
+                if (hover) using (var pen = new Pen(Color.FromArgb(214, 158, 36))) g.DrawLine(pen, 0, Height - 2, Width - 2, Height - 2);
+            }
+        }
+    }
+
+    // Text right on the background art: a dark shadow under it keeps it readable over bright parts of the picture.
+    class ShadowLabel : Clear
+    {
+        public bool Wrap = true;
+
+        public ShadowLabel() { Font = Theme.Font(11.5f); ForeColor = Color.FromArgb(214, 217, 223); }
+
+        // one line of this label's text: what a single-line one needs for its height
+        public static int LineHeight { get { return TextRenderer.MeasureText("Ag", Theme.Font(11.5f)).Height + 4; } }
+
+        // Cell: the text sits in a little rounded panel of its own, like a card (a page's notes)
+        public bool Cell;
+        static readonly Padding CellPadding = new Padding(14, 10, 14, 10);
+
+        // a page's note: wrapped text in its own cell, as tall as its text needs at this width
+        public static ShadowLabel Note(string text, int width)
+        {
+            var note = new ShadowLabel { Text = text, Cell = true, Margin = new Padding(8, 6, 8, 6) };
+            int inside = width - 16 - CellPadding.Horizontal;
+            note.Size = new Size(width - 16, TextRenderer.MeasureText(text, note.Font, new Size(inside, 0), TextFormatFlags.WordBreak).Height + CellPadding.Vertical);
+            return note;
+        }
+
+        protected override void OnTextChanged(EventArgs e) { Invalidate(); base.OnTextChanged(e); }
+        protected override void OnForeColorChanged(EventArgs e) { Invalidate(); base.OnForeColorChanged(e); }
+
+        // The shadow: the text's own shape, softened, a pixel down and right. Made once per text and size.
+        const int Pad = 4;
+        Bitmap shadow;
+        string shadowFor;
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var flags = TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPrefix | (Wrap ? TextFormatFlags.WordBreak : TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+            Rectangle box = new Rectangle(0, 0, Width - 2, Height - 2);
+            if (Cell)
+            {
+                Smooth(e.Graphics);
+                using (var path = Theme.Rounded(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 8))
+                {
+                    using (var fill = new SolidBrush(Color.FromArgb(215, Theme.Card))) e.Graphics.FillPath(fill, path);
+                    using (var pen = new Pen(Theme.Line)) e.Graphics.DrawPath(pen, path);
+                }
+                box = new Rectangle(CellPadding.Left, CellPadding.Top, Width - CellPadding.Horizontal, Height - CellPadding.Vertical);
+            }
+            if (string.IsNullOrEmpty(Text) || box.Width < 1 || box.Height < 1) return;
+            string key = Text + "\n" + Font.Size + "\n" + box.Size + "\n" + Wrap;
+            if (shadow == null || shadowFor != key)
+            {
+                if (shadow != null) shadow.Dispose();
+                shadow = Soft(box.Size, flags);
+                shadowFor = key;
+            }
+            e.Graphics.DrawImageUnscaled(shadow, box.X + 1 - Pad, box.Y + 1 - Pad);
+            TextRenderer.DrawText(e.Graphics, Text, Font, box, ForeColor, flags);
+        }
+
+        // The text drawn white on black; its brightness is the shadow's darkness, blurred (a 3x3 box, twice: close to a
+        // Gaussian), then made darker again so a thin stroke still stands off a bright background.
+        Bitmap Soft(Size size, TextFormatFlags flags)
+        {
+            int w = size.Width + Pad * 2, h = size.Height + Pad * 2;
+            var a = new float[w * h];
+            using (var mask = new Bitmap(w, h, PixelFormat.Format24bppRgb))
+            {
+                using (var g = Graphics.FromImage(mask))
+                {
+                    g.Clear(Color.Black);
+                    TextRenderer.DrawText(g, Text, Font, new Rectangle(new Point(Pad, Pad), size), Color.White, Color.Black, flags);
+                }
+                var data = mask.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+                var bytes = new byte[data.Stride * h];
+                Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
+                mask.UnlockBits(data);
+                for (int y = 0; y < h; y++)
+                    for (int x = 0; x < w; x++)
+                    {
+                        int i = y * data.Stride + x * 3;
+                        a[y * w + x] = Math.Max(bytes[i], Math.Max(bytes[i + 1], bytes[i + 2]));
+                    }
+            }
+            for (int pass = 0; pass < 2; pass++) { Blur(a, w, h, 1, w); Blur(a, w, h, w, 1); }
+            var pixels = new int[w * h];
+            for (int i = 0; i < pixels.Length; i++) pixels[i] = (int)Math.Min(225f, a[i] * 2.4f) << 24;
+            var soft = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+            var bits = soft.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+            for (int y = 0; y < h; y++) Marshal.Copy(pixels, y * w, bits.Scan0 + y * bits.Stride, w);
+            soft.UnlockBits(bits);
+            return soft;
+        }
+
+        // each value becomes the average of itself and its two neighbors along one direction (step 1: across, w: down)
+        static void Blur(float[] a, int w, int h, int step, int across)
+        {
+            int lines = step == 1 ? h : w, length = step == 1 ? w : h;
+            var line = new float[length];
+            for (int l = 0; l < lines; l++)
+            {
+                int start = l * across;
+                for (int i = 0; i < length; i++) line[i] = a[start + i * step];
+                for (int i = 0; i < length; i++)
+                    a[start + i * step] = ((i > 0 ? line[i - 1] : 0) + line[i] + (i < length - 1 ? line[i + 1] : 0)) / 3f;
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && shadow != null) { shadow.Dispose(); shadow = null; }
+            base.Dispose(disposing);
+        }
+    }
+
     class Heading : Clear
     {
         public Heading(string text, int width)
@@ -418,7 +760,7 @@ namespace ExMoreStuff
             this.wordmark = wordmark;
             System.Version v;
             this.version = System.Version.TryParse(version, out v) ? v.Major + "." + v.Minor : version;
-            Size = new Size(520, 150);
+            Size = new Size(520, 210);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -430,7 +772,7 @@ namespace ExMoreStuff
                 using (var fill = new SolidBrush(Theme.Strip)) g.FillPath(fill, path);
                 using (var pen = new Pen(Theme.Line)) g.DrawPath(pen, path);
             }
-            if (logo != null) g.DrawImage(logo, 24, 27, 96, 96);
+            if (logo != null) g.DrawImage(logo, 24, 57, 96, 96);
             const TextFormatFlags flags = TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPadding;
             if (wordmark != null) g.DrawImage(wordmark, 140, 22, 52f * wordmark.Width / wordmark.Height, 52);
             Theme.Draw(g, "Version " + version, Theme.Font(9f), Theme.Muted, new Rectangle(143, 78, Width - 160, 18), flags);
@@ -442,6 +784,9 @@ namespace ExMoreStuff
                 Theme.Draw(g, part.Item1, font, part.Item2 ? Theme.Accent : Theme.Text, new Rectangle(x, 102, Width - x, 26), flags);
                 x += TextRenderer.MeasureText(g, part.Item1, font, Size.Empty, flags).Width;
             }
+            Theme.Draw(g, "Round 2 and 3 music plays with Tom's Round BGM mod", Theme.Font(9f), Theme.Muted, new Rectangle(143, 138, Width - 160, 18), flags);
+            Theme.Draw(g, "GameBanana files are verified safe: virus-scanned by GameBanana, checked on download, and only costume files are used.",
+                Theme.Font(8f), Theme.Muted, new Rectangle(143, 162, Width - 160, 34), flags | TextFormatFlags.WordBreak);
         }
     }
 }

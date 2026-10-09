@@ -35,7 +35,7 @@ New costumes and stages for Ultra Street Fighter IV, in new slots: the game's ow
 1. Unzip this folder anywhere and run EXMoreStuff.exe (Windows 10 and 11 have everything it needs).
 2. Switch on the costumes and stages you want, click "Apply changes", close it, play.
    The game has to be closed while changes are applied.
-3. To undo: switch things off and apply again, or click "Remove everything".
+3. To undo: switch things off and apply again, or click "Disable everything".
 
 Nothing is installed on your PC: to remove the program, delete this folder.
 Online, custom costumes and stages need an EMBER build with custom content support.

@@ -1,7 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -17,10 +21,30 @@ namespace ExMoreStuff
         [STAThread]
         static void Main()
         {
-            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            // One window at a time: starting it again brings the open one to the front.
+            bool first;
+            using (var single = new Mutex(true, @"Local\EXMoreStuff", out first))
+            {
+                if (!first) { ShowOpenWindow(); return; }
+                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.Run(new MainForm());
+            }
+        }
+
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
+        [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window, int command);
+        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+
+        static void ShowOpenWindow()
+        {
+            int self = Process.GetCurrentProcess().Id;
+            Process open = Process.GetProcesses().FirstOrDefault(p => p.Id != self && p.MainWindowTitle == Title &&
+                                                                      !p.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase));
+            if (open == null) return;
+            if (IsIconic(open.MainWindowHandle)) ShowWindow(open.MainWindowHandle, 9);   // SW_RESTORE
+            SetForegroundWindow(open.MainWindowHandle);
         }
 
         public static string CatalogSource()

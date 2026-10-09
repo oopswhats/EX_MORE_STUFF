@@ -14,11 +14,15 @@ if not exist out mkdir out
 echo -resource:res\background.jpg,background.jpg>> out\resources.rsp
 echo -resource:res\logo.png,logo.png>> out\resources.rsp
 echo -resource:res\wordmark.png,wordmark.png>> out\resources.rsp
+rem Tom's Round BGM mod (dinput8.dll), put next to SSFIV.exe with round 2/3 music (src\RoundMod.cs)
+echo -resource:res\roundbgm\dinput8.dll,roundbgm.dll>> out\resources.rsp
+rem GameBanana's list as of this version, for when GameBanana can't be reached (test\GameBananaSnapshot.cs refreshes it)
+echo -resource:res\gamebanana.json,gamebanana.json>> out\resources.rsp
 "%CSC%" -nologo -target:winexe -platform:anycpu -optimize+ -langversion:7.3 -out:out\%OUT% ^
   -win32icon:src\app.ico -win32manifest:src\app.manifest ^
   -r:"%FW%\System.dll" -r:"%FW%\System.Core.dll" -r:"%FW%\System.Drawing.dll" -r:"%FW%\System.Windows.Forms.dll" ^
   -r:"%FW%\System.IO.Compression.dll" -r:"%FW%\System.IO.Compression.FileSystem.dll" -r:"%FW%\System.Net.Http.dll" ^
-  -r:"%FW%\System.Web.Extensions.dll" ^
+  -r:"%FW%\System.Web.Extensions.dll" -r:"%FW%\Microsoft.VisualBasic.dll" ^
   @out\resources.rsp src\*.cs
 set RESULT=%ERRORLEVEL%
 del out\resources.rsp

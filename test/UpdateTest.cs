@@ -61,7 +61,7 @@ namespace ExMoreStuff
 
         static Item StageItem(int slot, string version, string zip)
         {
-            return new Item { Id = "stage-" + slot, Type = "stage", Fighter = "", Slot = slot, Name = "Test", Version = version, Sha256 = Installer.Sha256(zip), Size = new FileInfo(zip).Length };
+            return new Item { Id = "stage-" + slot, Type = "stage", Fighter = "", Code = "C" + slot.ToString("D2"), Name = "Test", Version = version, Sha256 = Installer.Sha256(zip), Size = new FileInfo(zip).Length };
         }
 
         static void Main(string[] args)
@@ -99,6 +99,41 @@ namespace ExMoreStuff
             Catalog.Load(catalog).Wait();
             Check(Catalog.ProgramVersion != null && Catalog.ProgramVersion > new Version(0, 1, 0, 0), "0.2 is newer than 0.1.0.0 (" + Catalog.ProgramVersion + ")");
             Check(Catalog.ProgramPage == "https://example.com/ex-more-stuff", "page read");
+
+            Console.WriteLine("Stage codes");
+            Check(Stages.IsCustomCode("C12") && Stages.IsCustomCode("D05") && Stages.IsCustomCode("XYZ"), "C12, D05, XYZ are custom codes");
+            Check(!Stages.IsCustomCode("CHN") && !Stages.IsCustomCode("GAS") && !Stages.IsCustomCode("c12") && !Stages.IsCustomCode("AB"), "game codes, lower case and short codes aren't");
+            Check(Stages.FallbackCode("C12") == "CNX" && Stages.FallbackCode("D12") == "CNX" && Stages.FallbackCode("C71") == "ELV" && Stages.FallbackCode("XYZ") == "AFX",
+                "fallbacks: C12/D12 Run-down Back Alley, C71 Cosmic Elevator, XYZ Solar Eclipse");
+            // A player's own D05 with music, made from Training Stage plus a copy of the JUR theme.
+            string d05 = Path.Combine(packages, "Someone else's stage.zip");
+            using (ZipArchive zip = ZipFile.Open(d05, ZipArchiveMode.Create))
+            {
+                foreach (string suffix in StagePack.Suffixes)
+                {
+                    byte[] data = StagePack.Recode(File.ReadAllBytes(Path.Combine(real, "resource", StagePack.RelativePath("TRN", suffix))), "TRN", "D05");
+                    using (Stream s = zip.CreateEntry("STG_D05" + suffix).Open()) s.Write(data, 0, data.Length);
+                }
+                zip.CreateEntryFromFile(Path.Combine(real, @"dlc\04_ae2\battle\sound\bgm\BGM_JUR.csb"), "BGM_D05.csb");
+            }
+            Item own = Installer.Inspect(d05);
+            Check(own != null && own.IsStage && own.Code == "D05" && own.Personal, "Add from file sees stage D05, a personal package");
+            Installer.InstallPackage(game, own, d05, "file");
+            string patchFolder = Path.Combine(game, "patch_ae2_tu3");
+            Check(File.Exists(Path.Combine(patchFolder, @"battle\stage\STG_D05.emz")) && File.Exists(Path.Combine(patchFolder, @"battle\sound\bgm\BGM_D05.csb")), "stage in battle\\stage, music in battle\\sound\\bgm");
+            // a song can't go over a custom stage's own music: removing or updating the stage would take it
+            var d05Music = new MusicSlot { Code = "D05" };
+            bool refused = false;
+            try { MusicBank.Install(game, d05Music, new byte[] { 1 }, new InstalledSong()); } catch (InvalidOperationException) { refused = true; }
+            Check(MusicBank.PackageOwning(game, d05Music) != null && refused &&
+                  new FileInfo(Path.Combine(patchFolder, @"battle\sound\bgm\BGM_D05.csb")).Length > 1, "the Music page won't put a song over a stage package's music");
+            Installer.Remove(game, own.Key);
+            Check(!Directory.Exists(Path.Combine(patchFolder, @"battle\sound")), "removed: the music folder it made is gone too");
+            string port = Path.Combine(packages, "port.zip");
+            using (ZipArchive zip = ZipFile.Open(port, ZipArchiveMode.Create))
+                zip.CreateEntryFromFile(Path.Combine(real, @"resource\battle\stage\STG_TRN.emz"), "STG_CHN.emz");
+            Check(Installer.Inspect(port) == null, "a package of a game stage's code (STG_CHN) isn't a custom stage");
+            Check(Item.FromJson(new System.Collections.Generic.Dictionary<string, object> { { "type", "stage" }, { "slot", 71 } }).Code == "C71", "an old record with only number 71 is C71");
 
             Directory.Delete(game, true);
 
