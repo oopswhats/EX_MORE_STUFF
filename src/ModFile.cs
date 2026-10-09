@@ -216,14 +216,21 @@ namespace ExMoreStuff
             var costumes = SkinImport.Find(files);
             var stages = FindStages(files);
             var colors = FindColors(files);
-            if (costumes.Count == 0 && stages.Count == 0 && colors.Count == 0)
-                throw new InvalidDataException("it has no costume, color or stage files EX More Stuff can use (menus, HUDs, announcers and other sounds aren't supported)");
+            // music named the library's way (TRN_3_MAIN_Jackson.csb): the game file goes where its name says
+            var music = files.Where(f => f.Key.EndsWith(".csb", StringComparison.OrdinalIgnoreCase)).Select(f =>
+            {
+                int layer; string song;
+                MusicSlot slot = MusicBank.TaggedSlot(NameOf(f.Key), out layer, out song);
+                return slot == null ? null : new { Slot = slot, Layer = layer, Song = song, Bank = f.Value };
+            }).Where(m => m != null).GroupBy(m => m.Slot.File, StringComparer.OrdinalIgnoreCase).Select(g => g.OrderBy(m => m.Layer).First()).ToList();
+            if (costumes.Count == 0 && stages.Count == 0 && colors.Count == 0 && music.Count == 0)
+                throw new InvalidDataException("it has no costume, color, stage or music files EX More Stuff can use (menus, HUDs, announcers and other sounds aren't supported)");
             // its picture: the mod page's, else the first picture in it that isn't a costume's or stage's own
             if (picture == null)
                 picture = files.Where(f => Regex.IsMatch(f.Key, @"\.(png|jpe?g)$", RegexOptions.IgnoreCase) && !CostumePicture.IsMatch(NameOf(f.Key))).Select(f => f.Value).FirstOrDefault();
             string clean = Regex.Replace(name, @"[^\w\s\-\.\(\)]", "").Trim();
             if (clean.Length > 60) clean = clean.Substring(0, 60).Trim();
-            string folder = Path.Combine(patch, "ex_more_stuff_mods");
+            string folder = AppFolders.Mods;
             string credit = (!string.IsNullOrEmpty(author) ? " by " + author : "") + where;
             var result = new Result();
             foreach (var costume in costumes)
@@ -248,6 +255,20 @@ namespace ExMoreStuff
                     result.Into.Add(Fighters.Name(costume.Fighter) + " " + slot.ToString("D2"));
                 }
                 catch (Exception ex) { result.Problems.Add(Fighters.Name(costume.Fighter) + ": " + ex.Message); }
+            }
+            foreach (var m in music)
+            {
+                string place = m.Slot.Name + (m.Slot.Round > 1 ? " round " + m.Slot.Round : "");
+                say("Putting " + m.Song + " in for " + place + "...");
+                try
+                {
+                    if (MusicBank.GameFile(game, m.Slot.TemplateFile) == null) throw new FileNotFoundException("the game has no music there");
+                    MusicBank.Install(game, m.Slot, m.Bank, new InstalledSong { Song = m.Song, Layers = new[] { m.Song, m.Song, m.Song } });
+                    string round = m.Slot.Round > 1 ? RoundMod.Ensure(game) : null;   // Tom's Round BGM mod comes with round 2/3 music
+                    if (round != null) result.Problems.Add(place + ": " + round);
+                    result.Into.Add(place + " music");
+                }
+                catch (Exception ex) { result.Problems.Add(place + ": " + ex.Message); }
             }
             // a new color: its own number, unless another package has that one (then the first free from 30)
             foreach (var color in colors)

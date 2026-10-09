@@ -684,14 +684,18 @@ namespace ExMoreStuff
                 box = new Rectangle(CellPadding.Left, CellPadding.Top, Width - CellPadding.Horizontal, Height - CellPadding.Vertical);
             }
             if (string.IsNullOrEmpty(Text) || box.Width < 1 || box.Height < 1) return;
-            string key = Text + "\n" + Font.Size + "\n" + box.Size + "\n" + Wrap;
-            if (shadow == null || shadowFor != key)
+            // in a cell the text needs no shadow (it looked worse there); on the background art it does
+            if (!Cell)
             {
-                if (shadow != null) shadow.Dispose();
-                shadow = Soft(box.Size, flags);
-                shadowFor = key;
+                string key = Text + "\n" + Font.Size + "\n" + box.Size + "\n" + Wrap;
+                if (shadow == null || shadowFor != key)
+                {
+                    if (shadow != null) shadow.Dispose();
+                    shadow = Soft(box.Size, flags);
+                    shadowFor = key;
+                }
+                e.Graphics.DrawImageUnscaled(shadow, box.X + 1 - Pad, box.Y + 1 - Pad);
             }
-            e.Graphics.DrawImageUnscaled(shadow, box.X + 1 - Pad, box.Y + 1 - Pad);
             TextRenderer.DrawText(e.Graphics, Text, Font, box, ForeColor, flags);
         }
 

@@ -6,8 +6,9 @@
 // half their Ultra gauge; low health, when the timer is at 15 or someone's health is low): a song goes on one, and
 // the main song's options say what the other two play. Rounds 2 and 3 are Tom's Round BGM mod's files
 // (BGM_<stage>2.csb, BGM_<stage>3.csb; it plays them when dinput8.dll is next to SSFIV.exe).
-// "Save..." keeps a song with its loop and settings as a WAV (or the game file it makes); opening that WAV again
-// brings everything back.
+// Every song put in the game, or saved with Save, is kept in Music\ beside the program (MusicBank.Keep): the song file
+// as it was opened, its loop and settings, and the game file it made, named TRN_3_MAIN_Jackson; opening that song
+// again brings everything back. The folder button opens Music\.
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -34,6 +35,7 @@ namespace ExMoreStuff
         string game;
         MusicSlot slot;                 // the row picked (round 1)
         Song song;
+        string songFile;                // the song file opened (kept with the song), or null: a game file (.csb)
         double songLoudness; int songPeak = 1;   // the open song's, worked out once
         Dictionary<string, InstalledSong> installed = new Dictionary<string, InstalledSong>(StringComparer.OrdinalIgnoreCase);
         string listProblem;             // the songs list can't be read: shown, and nothing is put in or given back
@@ -44,8 +46,6 @@ namespace ExMoreStuff
         double volumeDb;
 
         readonly ScrollList list = new ScrollList { FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(4, 4, 0, 4) };
-        readonly TextBox customBox = DarkBox(64);
-        readonly FlatButton addCustom = Small("Add");
         readonly Label title = MakeLabel(Theme.Bold(14f), Theme.Text), now = MakeLabel(Theme.Font(9f), Theme.Muted), songLabel = MakeLabel(Theme.Bold(9.5f), Theme.Text);
         readonly FlatButton openSong = new FlatButton("Open a song..."), openGame = new FlatButton("Open what the game plays here");
         readonly WaveformView wave = new WaveformView();
@@ -54,7 +54,8 @@ namespace ExMoreStuff
                             whole = Small("Show all"), atStart = Small("Start"), atEnd = Small("End");
         readonly Toggle loop = new Toggle("Loop") { Checked = true, Width = 84 }, bassPreview = new Toggle("Bass cut") { Width = 104 },
                         gameLevel = new Toggle("Hear it as in game") { Checked = true, Width = 170 };
-        readonly Label clock = MakeLabel(Theme.Font(9f), Theme.Muted), customLabel = MakeLabel(Theme.Font(8.5f), Theme.Muted);
+        readonly Label clock = MakeLabel(Theme.Font(9f), Theme.Muted);
+        readonly FlatButton songsFolder = new FlatButton("") { Font = new Font("Segoe MDL2 Assets", 12f), Size = new Size(40, 36) };
         readonly Label startLabel = MakeLabel(Theme.Bold(9f), Color.FromArgb(70, 210, 120)), endLabel = MakeLabel(Theme.Bold(9f), Theme.Accent);
         readonly TextBox startBox = DarkBox(92), endBox = DarkBox(92);
         readonly FlatButton startHere = Small("At cursor"), endHere = Small("At cursor");
@@ -70,7 +71,7 @@ namespace ExMoreStuff
         readonly Choice round = new Choice("1", "2", "3"), layer = new Choice(MusicBank.LayerNames);
         readonly Label ultraLabel = MakeLabel(Theme.Bold(9f), Theme.Text), lowLabel = MakeLabel(Theme.Bold(9f), Theme.Text), layerNote = MakeLabel(Theme.Font(8.5f), Theme.Muted);
         readonly Choice ultraMode = new Choice(UltraModes), lowMode = new Choice(LowModes);
-        readonly FlatButton install = new FlatButton("Put in the game", true), restore = new FlatButton("Give back the game's music"), save = new FlatButton("Save...");
+        readonly FlatButton install = new FlatButton("Put in the game", true), restore = new FlatButton("Give back the game's music"), save = new FlatButton("Save");
         readonly Label status = MakeLabel(Theme.Bold(9f), Theme.Text);
         readonly WavePlayer player = new WavePlayer();
         readonly Timer timer = new Timer { Interval = 30 };
@@ -79,12 +80,10 @@ namespace ExMoreStuff
         public MusicPanel()
         {
             Controls.Add(list);
-            Controls.AddRange(new Control[] { customLabel, customBox, addCustom });
-            customLabel.Text = "A custom stage, by its code:";
             clock.TextAlign = ContentAlignment.MiddleRight;
             Controls.AddRange(new Control[]
             {
-                title, now, openSong, openGame, songLabel, clock, wave, play, stop, testLoop, loop, bassPreview, gameLevel, whole, atStart, atEnd,
+                title, now, openSong, songsFolder, openGame, songLabel, clock, wave, play, stop, testLoop, loop, bassPreview, gameLevel, whole, atStart, atEnd,
                 startLabel, startBox, startHere, endLabel, endBox, endHere, lengthLabel, find, fit, matchLabel, seam,
                 snap, loud, smooth, volumeLabel, quieter, volumeBox, louder, volumeNote,
                 roundLabel, round, layerLabel, layer, roundNote, ultraLabel, ultraMode, lowLabel, lowMode, layerNote,
@@ -101,6 +100,11 @@ namespace ExMoreStuff
             volumeBox.Text = "0.0";
 
             openSong.Click += async (s, e) => await OpenSong();
+            songsFolder.Click += (s, e) =>
+            {
+                try { Directory.CreateDirectory(AppFolders.Music); System.Diagnostics.Process.Start("explorer.exe", "\"" + AppFolders.Music + "\""); }
+                catch (Exception ex) { Say(ex.Message, true); }
+            };
             openGame.Click += async (s, e) => await OpenGameTheme();
             play.Click += (s, e) => Play(wave.CursorFrame, loop.Checked);
             stop.Click += (s, e) => player.Stop();
@@ -126,8 +130,6 @@ namespace ExMoreStuff
             install.Click += async (s, e) => await Install();
             restore.Click += (s, e) => Restore();
             save.Click += async (s, e) => await Save();
-            addCustom.Click += (s, e) => AddCustom();
-            customBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { AddCustom(); e.SuppressKeyPress = true; } };
             foreach (var box in new[] { startBox, endBox })
             {
                 var b = box;
@@ -139,7 +141,8 @@ namespace ExMoreStuff
             timer.Tick += (s, e) => { wave.Playhead = player.Playing ? player.Position : -1; ShowClock(); };
             timer.Start();
 
-            tips.SetToolTip(openSong, "A WAV, MP3, FLAC, M4A or WMA file, or a game theme (.csb). A WAV saved here keeps its loop and settings");
+            tips.SetToolTip(openSong, "A WAV, MP3, FLAC, M4A or WMA file, or a game music file (.csb). A song from your songs folder opens with its loop and settings");
+            tips.SetToolTip(songsFolder, "Your songs: every song put in the game or saved, with its loop and settings and the game file it made (" + AppFolders.Music + ")");
             tips.SetToolTip(openGame, "What this stage or fighter plays now (the round and layer picked), with its loop");
             tips.SetToolTip(testLoop, "Plays the last 4 seconds before the loop end and the jump back to the loop start, over and over");
             tips.SetToolTip(bassPreview, "Plays the song with its bass (and a little of its mids) cut, as the low-health layer's \"Bass cut\" puts it in");
@@ -158,7 +161,7 @@ namespace ExMoreStuff
             tips.SetToolTip(layer, "Main: the stage's theme. Ultra: when both players have half their Ultra gauge. Low health: when the timer is at 15 or someone's health is low");
             tips.SetToolTip(ultraMode, "This song: no change at Ultra.  Its own: a song put on the Ultra layer.  The game's: the stage's own Ultra music");
             tips.SetToolTip(lowMode, "This song: no change at low health.  Bass cut: this song with its bass turned down, in step.  Its own: a song put on the low-health layer.  The game's: the stage's own");
-            tips.SetToolTip(save, "Keeps the song with its loop and these settings as a WAV, to open again later; or saves the game file it makes (.csb)");
+            tips.SetToolTip(save, "Keeps the song in your songs folder without putting it in the game: the song file, its loop and settings, and the game file it makes, named like TRN_3_MAIN_Jackson");
             tips.SetToolTip(wave, "Wheel: zoom.  Right or middle drag: scroll.  Click: play cursor.  Drag the green and orange lines: loop start and end (Shift: no snapping).");
             UpdateEditor();
         }
@@ -208,9 +211,11 @@ namespace ExMoreStuff
             list.Controls.Add(new Heading("Stages", width) { Font = Theme.Bold(11f), Height = 34 });
             foreach (var code in Stages.Codes)
                 AddRow(new MusicSlot { Code = code }, width);
-            var custom = installed.Keys.Select(MusicSlot.FromFile).Where(s => !s.Fighter && Stages.IsCustomCode(s.Code))
-                .Select(s => s.Code).Distinct().OrderBy(c => c).ToList();
-            if (custom.Count > 0) list.Controls.Add(new Heading("Custom stages", width) { Font = Theme.Bold(11f), Height = 34 });
+            // the custom stages installed (and any with a song of ours), after a yellow line
+            var custom = (Game.IsGameFolder(game) ? Installer.Load(game).Where(r => r.Item.IsStage).Select(r => r.Item.Code) : Enumerable.Empty<string>())
+                .Concat(installed.Keys.Select(MusicSlot.FromFile).Where(s => !s.Fighter && Stages.IsCustomCode(s.Code)).Select(s => s.Code))
+                .Distinct().OrderBy(c => c).ToList();
+            if (custom.Count > 0) list.Controls.Add(new Rule { Width = width, Height = 14, Margin = new Padding(2, 2, 2, 2) });
             foreach (var code in custom) AddRow(new MusicSlot { Code = code }, width);
             list.Controls.Add(new Heading("Fighters", width) { Font = Theme.Bold(11f), Height = 34 });
             foreach (int i in Fighters.DisplayOrder)
@@ -244,23 +249,6 @@ namespace ExMoreStuff
             row.Song = songs.Count == 0 ? null : string.Join(", ", songs);
             tips.SetToolTip(row, row.Song == null ? row.Slot.Name : row.Slot.Name + ": " + row.Song);
             row.Invalidate();
-        }
-
-        void AddCustom()
-        {
-            string code = customBox.Text.Trim().ToUpperInvariant();
-            if (!Stages.IsCustomCode(code)) { Say("A custom stage code is 3 letters or digits that no game stage uses (like C12)", true); return; }
-            var row = rows.FirstOrDefault(r => r.Slot.Code == code && !r.Slot.Fighter);
-            if (row == null)
-            {
-                int width = ListWidth - 46, at = list.Controls.IndexOf(rows.First(r => r.Slot.Fighter)) - 1;
-                AddRow(new MusicSlot { Code = code }, width);
-                row = rows.Last();
-                list.Controls.SetChildIndex(row, Math.Max(0, at));
-            }
-            customBox.Text = "";
-            Select(row);
-            list.ScrollControlIntoView(row);
         }
 
         void Select(SlotRow row)
@@ -313,10 +301,15 @@ namespace ExMoreStuff
                 {
                     loaded = AudioFile.Load(path);
                     if (loaded.Frames < Song.Rate) throw new InvalidDataException(Path.GetFileName(path) + " is shorter than a second");
+                    // a song from the songs folder: its loop and settings kept beside it
+                    int kls, kle; string kept;
+                    if (loaded.LoopStart < 0 && MusicBank.ReadKept(path, out kls, out kle, out kept) && kle <= loaded.Frames)
+                    { loaded.LoopStart = kls; loaded.LoopEnd = kle; loaded.Settings = kept; }
                     if (loaded.LoopStart < 0 && loaded.Frames <= AutoFindLimit) found = LoopFinder.Find(loaded.Pcm);
                 }
             })) return;
             if (loaded.Settings != null) ApplySettings(loaded.Settings);
+            songFile = bank ? null : path;
             SetSong(loaded, found != null ? found.Start : Math.Max(0, loaded.LoopStart), found != null ? found.End : loaded.LoopEnd > 0 ? loaded.LoopEnd : loaded.Frames);
             if (found != null) SayFound(found);
             else if (bank) Say("Opened " + loaded.Name + " with the game's own loop");
@@ -348,6 +341,7 @@ namespace ExMoreStuff
             Song loaded = null;
             int ls = 0, cue = Layer;
             if (!await Run("Opening " + name, () => loaded = MusicBank.Decode(File.ReadAllBytes(path), cue, name, out ls))) return;
+            songFile = null;
             SetSong(loaded, ls, loaded.Frames);
             Say("This is what the game plays for " + name + (ours ? " now (from patch_ae2_tu3)" : ""));
         }
@@ -623,7 +617,7 @@ namespace ExMoreStuff
             player.Stop();
             var pcm = Preview(false);
             int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
-            string name = song.Name, g = game, roundProblem = null;
+            string name = song.Name, g = game, roundProblem = null, source = songFile, settings = Settings(), keepProblem = null;
             var have = installed;
             if (!await Run("Putting " + name + " in the game", () =>
             {
@@ -631,51 +625,34 @@ namespace ExMoreStuff
                 var bank = BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, out about);
                 MusicBank.Install(g, target, bank, about);
                 if (target.Round > 1) roundProblem = RoundMod.Ensure(g);   // Tom's Round BGM mod comes with round 2/3 music
+                // and kept in the songs folder, so giving the game's music back never loses it
+                try { MusicBank.Keep(target, layerIndex, name, bank, source, ls, le, settings); }
+                catch (Exception ex) { keepProblem = ex.Message; }
             })) return;
             Reload();
             string where = target.Name + (target.Round > 1 ? ", round " + target.Round : "") + (layerIndex > 0 ? ", " + MusicBank.LayerNames[layerIndex].ToLowerInvariant() + " layer" : "");
             if (roundProblem != null) Say(name + " is in for " + where + ", but " + roundProblem, true);
-            else Say(name + " now plays for " + where + ". Start the game to hear it");
+            else if (keepProblem != null) Say(name + " now plays for " + where + ", but it couldn't be kept in your songs folder: " + keepProblem, true);
+            else Say(name + " now plays for " + where + ". Start the game to hear it"); 
         }
 
+        // Save: kept in the songs folder (overwriting) as Put in the game keeps it, without putting it in
         async Task Save()
         {
-            if (song == null) return;
             var target = Target;
-            string path;
-            int kind;
-            using (var dialog = new SaveFileDialog
-            {
-                Title = "Save the song",
-                Filter = "Song with its loop and settings (*.wav)|*.wav" + (target != null ? "|Game music file for " + target.Name + " (*.csb)|*.csb" : ""),
-                FileName = song.Name,
-            })
-            {
-                if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                path = dialog.FileName;
-                kind = dialog.FilterIndex;
-            }
+            if (song == null || target == null) return;
+            if (MusicBank.GameFile(game, target.TemplateFile) == null) { Say("The game has no music to build " + target.Name + " on", true); return; }
             player.Stop();
-            short[] raw = song.Pcm;
+            var pcm = Preview(false);
             int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
-            string settings = Settings(), name = song.Name;
-            if (kind == 1)
+            string settings = Settings(), name = song.Name, g = game, source = songFile, kept = null;
+            var have = installed;
+            if (!await Run("Saving " + name, () =>
             {
-                if (!await Run("Saving " + Path.GetFileName(path), () => AudioFile.WriteLoopedWav(path, raw, ls, le, settings))) return;
-                Say("Saved " + Path.GetFileName(path) + " with its loop. Open it again any time to put it in");
-            }
-            else
-            {
-                var pcm = Preview(false);
-                string g = game;
-                var have = installed;
-                if (!await Run("Saving " + Path.GetFileName(path), () =>
-                {
-                    InstalledSong about;
-                    File.WriteAllBytes(path, BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, out about));
-                })) return;
-                Say("Saved " + Path.GetFileName(path) + ": in the game it goes in battle\\sound\\bgm as " + target.File);
-            }
+                InstalledSong about;
+                kept = MusicBank.Keep(target, layerIndex, name, BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, out about), source, ls, le, settings);
+            })) return;
+            Say("Saved as " + kept + " in your songs folder (the folder button)");
         }
 
         void Restore()
@@ -807,17 +784,15 @@ namespace ExMoreStuff
         {
             int w = Width, h = Height;
             if (w < 400 || h < 300) return;
-            list.Bounds = new Rectangle(6, 6, ListWidth - 12, h - 80);
-            customLabel.Bounds = new Rectangle(12, h - 70, ListWidth - 24, 20);
-            customBox.Location = new Point(12, h - 38);
-            addCustom.Location = new Point(customBox.Right + 6, h - 40);
-            tips.SetToolTip(customBox, "A custom stage's code (like C12), to give it a song");
+            list.Bounds = new Rectangle(6, 6, ListWidth - 12, h - 12);
 
             int x = ListWidth + Gap + 14, right = w - 14, ew = right - x;
             title.Bounds = new Rectangle(x, 8, ew - 420, 28);
             now.Bounds = new Rectangle(x, 36, ew - 420, 18);
             openGame.Location = new Point(right - openGame.Width, 10);
-            openSong.Location = new Point(openGame.Left - openSong.Width - 8, 10);
+            songsFolder.Location = new Point(openGame.Left - songsFolder.Width - 8, 10);
+            songsFolder.Height = openGame.Height;
+            openSong.Location = new Point(songsFolder.Left - openSong.Width - 6, 10);
             clock.Bounds = new Rectangle(right - 170, 60, 170, 20);
             gameLevel.Location = new Point(clock.Left - gameLevel.Width - 10, 57);
             songLabel.Bounds = new Rectangle(x, 60, gameLevel.Left - x - 10, 20);
@@ -895,6 +870,15 @@ namespace ExMoreStuff
                 g.FillPath(fill, path);
                 g.DrawPath(pen, path);
             }
+        }
+    }
+
+    // The line between the game's stages and the custom ones in the Music page's list: yellow.
+    class Rule : Clear
+    {
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            using (var pen = new Pen(Color.FromArgb(255, 205, 60), 2f)) e.Graphics.DrawLine(pen, 6, Height / 2, Width - 6, Height / 2);
         }
     }
 

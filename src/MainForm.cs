@@ -95,8 +95,8 @@ namespace ExMoreStuff
             var logo = new PictureBox { Image = Theme.Resource("logo.png"), SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent, Bounds = new Rectangle(18, 14, 48, 48) };
             var title = new PictureBox { Image = wordmark, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent, Bounds = new Rectangle(76, 16, 205, 44) };
             var divider = new Panel { BackColor = Color.FromArgb(52, 55, 62), Bounds = new Rectangle(title.Right + 14, 22, 1, 32) };
-            var tagline = new Label { Text = "Custom costumes, stages and music\nfor Ultra Street Fighter IV", AutoSize = true, BackColor = Color.Transparent,
-                                      Font = Theme.Font(9f), ForeColor = Theme.Muted, Location = new Point(divider.Right + 12, 21) };
+            tagline = new Label { Text = "Custom costumes, stages and music\nfor Ultra Street Fighter IV", AutoSize = true, BackColor = Color.Transparent,
+                                  Font = Theme.Font(9f), ForeColor = Theme.Muted, Location = new Point(divider.Right + 12, 21) };
             aboutTab.Location = new Point(ClientSize.Width - aboutTab.Width - 18, 26);
             advancedTab.Location = new Point(aboutTab.Left - advancedTab.Width - 4, 26);
             communityTab.Location = new Point(advancedTab.Left - communityTab.Width - 4, 26);
@@ -201,6 +201,7 @@ namespace ExMoreStuff
             if (!Game.IsGameFolder(game)) { Opacity = 1; if (!ChooseGame()) { Close(); return; } }
             Settings.GameFolder = game;
             ShowGame();
+            await AdoptPackages();
             Reload();   // what's installed, right away: the catalog's items join when it comes
             SetStatus("Loading the catalog...");
             try { catalog = await Catalog.Load(Program.CatalogSource()); catalogProblem = null; }
@@ -208,6 +209,15 @@ namespace ExMoreStuff
             ShowProgramUpdate();
             Reload();
             communityPage.CheckForUpdates();   // GameBanana's list, read in the background: updates for installed mods
+        }
+
+        // packages' zips from before the Mods folder come into it (once; it may take a moment for big zips)
+        async Task AdoptPackages()
+        {
+            if (!Game.IsGameFolder(game)) return;
+            string g = game;
+            try { await Task.Run(() => Installer.AdoptPackages(g, AppFolders.Mods)); }
+            catch (Exception ex) { MessageBox.Show(this, "Some packages couldn't be copied into " + AppFolders.Mods + ": " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -224,7 +234,10 @@ namespace ExMoreStuff
             fade.Start();
         }
 
-        // A newer EX More Stuff in the catalog: a link to its page in the header (nothing is downloaded by itself).
+        Label tagline;
+
+        // A newer EX More Stuff in the catalog: a link to its page in the header, in the tagline's place (the tabs leave
+        // no room beside it); nothing is downloaded by itself.
         void ShowProgramUpdate()
         {
             if (Catalog.ProgramVersion == null || Catalog.ProgramVersion <= typeof(MainForm).Assembly.GetName().Version) return;
@@ -233,10 +246,12 @@ namespace ExMoreStuff
                 Text = "Version " + Catalog.ProgramVersion + " is out  ›", AutoSize = true, BackColor = Color.Transparent,
                 Font = Theme.Bold(9.5f), LinkColor = Theme.GoodText, ActiveLinkColor = Color.White, LinkBehavior = LinkBehavior.HoverUnderline,
             };
-            link.Location = new Point(costumesTab.Left - TextRenderer.MeasureText(link.Text, link.Font).Width - 24, 30);
+            link.Location = new Point(tagline.Left, tagline.Top + (tagline.Height - TextRenderer.MeasureText(link.Text, link.Font).Height) / 2);
+            tagline.Visible = false;
             link.LinkClicked += (s, e) => System.Diagnostics.Process.Start(Catalog.ProgramPage);
             tips.SetToolTip(link, "Get the new EX More Stuff: " + Catalog.ProgramPage);
             header.Controls.Add(link);
+            link.BringToFront();
         }
 
         bool ChooseGame()
@@ -385,7 +400,9 @@ namespace ExMoreStuff
             Reload();
             foreach (var w in keepWanted) wanted[w.Key] = w.Value;
             foreach (var n in keepNames) wantedNames[n.Key] = n.Value;
-            foreach (var r in keepReplaced) wantedReplaced[r.Key] = r.Value;
+            // a replacement waiting for Apply whose stage is gone (deleted) is dropped
+            var stagesLeft = new HashSet<string>(Stages.Codes.Concat(installed.Concat(removed).Where(r => r.Item.IsStage).Select(r => r.Item.Code)));
+            foreach (var r in keepReplaced) if (stagesLeft.Contains(r.Value)) wantedReplaced[r.Key] = r.Value;
             BuildRoster();
             if (openFighter != null) ShowCostumes(openFighter);
             BuildStages();
@@ -511,7 +528,7 @@ namespace ExMoreStuff
             var codes = new ToolCard
             {
                 Symbol = "⇄", Title = "Package codes",
-                Detail = "Change the stage code or costume slot of your own packages. The zip itself is updated, ready to share.",
+                Detail = "Change the stage code, costume slot or color number of your own packages (the zip is updated, ready to share), or delete them.",
                 Margin = new Padding(6),
             };
             codes.Click += (s, e) => { openTool = "packages"; ShowTab(advancedTab); };
@@ -898,7 +915,7 @@ namespace ExMoreStuff
                         Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) return;
                 if (IsInstalled(item.Key) && MessageBox.Show(this, Describe(item) + " is already installed. Replace it?", Text,
                         MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) return;
-                Installer.InstallPackage(game, item, path, "file");
+                Installer.InstallPackage(game, item, AppFolders.KeepPackage(path), "file");   // a copy in Mods\, so the player's file may move
                 string round = RoundMusicMod();
                 if (round != null) MessageBox.Show(this, "Added, but " + round + ".", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
                 Reload();

@@ -118,14 +118,23 @@ namespace ExMoreStuff
             return !string.IsNullOrEmpty(record.Package) && File.Exists(record.Package) && !shared;
         }
 
+        // the game stages a stage stands in for (the Stages page's replace): deleting it gives them their own back
+        static List<string> StandingIn(string game, Item item)
+        {
+            return item.IsStage ? Replacements.Load(game).Where(r => r.Source == item.Code).Select(r => r.Stage).ToList() : new List<string>();
+        }
+
         public static string DeleteQuestion(string game, Installed record, string title)
         {
             Item item = record.Item;
             bool inGame = Installer.Load(game).Any(r => r.Item.Key == item.Key), recycle = RecyclesZip(game, record);
             bool kept = !recycle && !string.IsNullOrEmpty(record.Package);
+            var standing = StandingIn(game, item).Select(Stages.Name).ToList();
             return "Delete " + title + " for good?\n\n" +
                    (inGame ? "It's taken out of the game and off EX More Stuff's lists" : "It's taken off EX More Stuff's lists") +
                    (item.IsStage ? ", with any songs you put on " + item.Code + " on the Music page" : "") + ".\n" +
+                   (standing.Count > 0 ? string.Join(" and ", standing) + (standing.Count > 1 ? ", which play as it now, get their own stages back.\n"
+                                                                                           : ", which plays as it now, gets its own stage back.\n") : "") +
                    (recycle ? "Its zip (" + Path.GetFileName(record.Package) + ") goes to the Recycle Bin." :
                     kept && File.Exists(record.Package) ? "Its zip stays: another package uses it." : kept ? "Its zip isn't where it was, so nothing else is touched." : "");
         }
@@ -133,10 +142,17 @@ namespace ExMoreStuff
         /// <summary>The deleting itself, off the window's thread (the zip goes after, with RecycleZip). A note on songs, or null.</summary>
         public static string PurgeForGood(string game, Installed record)
         {
+            var notes = new List<string>();
+            foreach (string stage in StandingIn(game, record.Item))
+            {
+                string kept = Replacements.Restore(game, stage);
+                if (kept != null) notes.Add(Stages.Name(stage) + ": " + kept);
+            }
             Installer.Purge(game, record.Item.Key);
             string songs = record.Item.IsStage ? MusicBank.RemoveCode(game, record.Item.Code) : null;
+            if (songs != null) notes.Add(songs);
             RoundMod.RemoveIfUnused(game);
-            return songs;
+            return notes.Count > 0 ? string.Join("\n", notes) : null;
         }
 
         public static void RecycleZip(string path)

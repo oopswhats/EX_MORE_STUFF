@@ -88,8 +88,12 @@ namespace ExMoreStuff
                             new Rectangle(band.X + 8, band.Y, band.Width - 16, band.Height), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     }
                     g.ResetClip();
-                    Color line = i == hover ? Theme.Accent : replacement != null ? Color.FromArgb(160, Theme.Badge) : Theme.Line;
-                    using (var pen = new Pen(line, i == hover || replacement != null ? 2f : 1f)) g.DrawPath(pen, path);
+                    if (replacement != null)
+                        // replaced: a thick white border, seen at a glance (user)
+                        using (var inner = Theme.Rounded(new RectangleF(r.X + 2, r.Y + 2, r.Width - 4, r.Height - 4), 7))
+                        using (var pen = new Pen(Color.White, 4f)) g.DrawPath(pen, inner);
+                    else
+                        using (var pen = new Pen(i == hover ? Theme.Accent : Theme.Line, i == hover ? 2f : 1f)) g.DrawPath(pen, path);
                 }
                 Theme.Draw(g, Stages.Name(Grid[i]), Theme.Font(9f), Theme.Text, new Rectangle(r.X + 6, r.Y + PictureHeight, r.Width - 12, NameHeight),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);

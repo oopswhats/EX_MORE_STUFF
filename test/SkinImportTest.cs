@@ -48,6 +48,7 @@ namespace ExMoreStuff
             string game = args[0], skin = args[1], scratch = args[2];
             if (Directory.Exists(scratch)) Directory.Delete(scratch, true);
             Directory.CreateDirectory(scratch);
+            AppFolders.Root = Path.Combine(scratch, "program");   // its Mods\ here, not beside the test
 
             Console.WriteLine("A real skin, one version");
             var files = GameBanana.Unpack(skin, Path.Combine(scratch, "work")).Select(f => F("ver1/" + f.Key, f.Value)).ToList();

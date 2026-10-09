@@ -76,11 +76,15 @@ namespace ExMoreStuff
             Check(note == null && MusicBank.Load(game).ContainsKey("BGM_E072.csb") && File.Exists(Path.Combine(patch, @"battle\sound\bgm\BGM_E072.csb")) &&
                   !File.Exists(song), "the round 2 song moved with it");
 
-            // what its zip holds, then deleting it for good (Package codes' Delete, minus the Recycle Bin)
+            // what its zip holds; standing in for Training Stage (the Stages page's replace); then deleted for good
+            // (Package codes' Delete and the cards' trash can, minus the Recycle Bin): Training Stage gets its own back
             Check(Installer.PackageHolds(stageZip, now.Item) && !Installer.PackageHolds(stageZip, stage), "the zip holds E07 now, not D05");
-            Installer.Purge(game, now.Item.Key);
-            string left = MusicBank.RemoveCode(game, "E07");
+            Replacements.Replace(game, "TRN", "E07");
+            Check(Replacements.Load(game).Single().Source == "E07" && File.Exists(Path.Combine(patch, @"battle\stage\STG_TRN.emz")), "Training Stage plays as E07");
+            Check(PackagesPanel.DeleteQuestion(game, now, "Over Pipe").Contains(Stages.Name("TRN") + ", which plays as it now, gets its own stage back"), "the question says so");
+            string left = PackagesPanel.PurgeForGood(game, now);
             Check(left == null && Installer.Load(game).Count == 0 && Installer.Removed(game).Count == 0, "deleted: off both lists");
+            Check(Replacements.Load(game).Count == 0 && !File.Exists(Path.Combine(patch, @"battle\stage\STG_TRN.emz")), "Training Stage has its own stage back");
             Check(!File.Exists(Path.Combine(patch, @"battle\stage\STG_E07.emz")) && !File.Exists(Path.Combine(patch, @"battle\sound\bgm\BGM_E07.csb")) &&
                   !File.Exists(Path.Combine(patch, @"battle\sound\bgm\BGM_E072.csb")) && MusicBank.Load(game).Count == 0, "its files and its Music-page song are gone");
             Check(File.Exists(stageZip), "its zip is left to the caller");

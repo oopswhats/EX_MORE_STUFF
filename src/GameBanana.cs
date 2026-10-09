@@ -84,7 +84,7 @@ namespace ExMoreStuff
             return all;
         }
 
-        static string KeptFile { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), Program.Title, "gamebanana.json"); } }
+        static string KeptFile { get { return AppFolders.DataFile("gamebanana.json"); } }
 
         // GameBanana's list, kept on the PC each time it's read (gamebanana.json beside the settings): when GameBanana can't
         // be reached (offline for a day, its API changed in years), the list from before is used; failing that, the one

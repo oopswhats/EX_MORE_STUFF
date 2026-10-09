@@ -467,7 +467,7 @@ namespace ExMoreStuff
                         throw new InvalidOperationException("your " + Fighters.Name(other.Item.Fighter) + " " + other.Item.TitleNamed(other.Shown ?? other.Item.Name) +
                                                             " is in the code this skin shares with everyone; give yours another code in Advanced > Package codes first");
                     string name = Regex.Replace(mod.Name, @"[^\w\s\-\.\(\)]", "").Trim();
-                    string zip = Path.Combine(patch, "ex_more_stuff_mods", name + " - " + costume.Fighter + " " + slot.ToString("D2") + ".zip");
+                    string zip = Path.Combine(AppFolders.Mods, name + " - " + costume.Fighter + " " + slot.ToString("D2") + ".zip");
                     var item = new Item
                     {
                         Id = id, Type = "costume", Fighter = costume.Fighter, Slot = slot, Code = "", Name = mod.Name, Author = mod.Author, Version = Signature(mod),

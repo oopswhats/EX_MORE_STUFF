@@ -57,10 +57,10 @@ namespace ExMoreStuff
         }
     }
 
-    // The few things remembered between runs (only the game folder), in %APPDATA%\EX More Stuff.
+    // The few things remembered between runs (only the game folder), in settings.json beside the program (AppFolders).
     static class Settings
     {
-        static string SettingsFile { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), Program.Title, "settings.json"); } }
+        static string SettingsFile { get { return AppFolders.DataFile("settings.json"); } }
 
         public static string GameFolder
         {

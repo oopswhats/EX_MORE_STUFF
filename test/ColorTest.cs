@@ -36,6 +36,7 @@ namespace ExMoreStuff
         {
             string real = args[0], game = Path.Combine(args[1], "game"), packages = Path.Combine(args[1], "packages");
             if (Directory.Exists(args[1])) Directory.Delete(args[1], true);
+            AppFolders.Root = Path.Combine(args[1], "program");   // its Mods\ here, not beside the test
             string patch = Path.Combine(game, "patch_ae2_tu3"), chara = Path.Combine(patch, "battle", "chara");
             Directory.CreateDirectory(patch);
             Directory.CreateDirectory(packages);

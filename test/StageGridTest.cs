@@ -1,4 +1,4 @@
-﻿// Renders the StageGrid (the program's own control) to a PNG to check its look. Usage: StageGridTest <game> <out.png>
+﻿// Renders the StageGrid (the program's own control) to a PNG to check its look, two stages shown replaced. Usage: StageGridTest <game> <out.png>
 using System.Drawing;
 using System.Drawing.Imaging;
 
@@ -11,6 +11,7 @@ namespace ExMoreStuff
             using (var grid = new StageGrid(930))
             using (var bitmap = new Bitmap(grid.Width, grid.Height))
             {
+                grid.ReplacedBy = code => code == "LAB" || code == "TRN" ? "The Retrowave Zone" : null;   // two shown replaced
                 grid.DrawToBitmap(bitmap, new Rectangle(0, 0, grid.Width, grid.Height));
                 bitmap.Save(args[1], ImageFormat.Png);
             }

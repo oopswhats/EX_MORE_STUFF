@@ -379,6 +379,38 @@ namespace ExMoreStuff
             catch (Exception) { return false; }
         }
 
+        /// <summary>From before the Mods folder: each package's zip (in the game or switched off) comes into `library`.
+        /// EX More Stuff's own builds (patch_ae2_tu3\ex_more_stuff_mods) are moved; the player's own zips are copied, theirs
+        /// staying where they are; a zip that isn't there any more is left as it is. Returns how many came.</summary>
+        public static int AdoptPackages(string game, string library)
+        {
+            var records = Load(game);
+            var removed = Removed(game);
+            string old = Path.Combine(Game.PatchFolder(game), "ex_more_stuff_mods");
+            var done = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // a zip two packages share comes once
+            int count = 0;
+            foreach (Installed r in records.Concat(removed))
+            {
+                if (string.IsNullOrEmpty(r.Package) || AppFolders.Inside(r.Package, library)) continue;
+                string to;
+                if (!done.TryGetValue(r.Package, out to))
+                {
+                    if (!File.Exists(r.Package)) continue;
+                    Directory.CreateDirectory(library);
+                    to = AppFolders.PlaceFor(library, Path.GetFileName(r.Package), r.Package);
+                    if (!File.Exists(to)) File.Copy(r.Package, to);
+                    if (AppFolders.Inside(r.Package, old)) File.Delete(r.Package);
+                    done[r.Package] = to;
+                }
+                r.Package = to;
+                count++;
+            }
+            if (count > 0) Save(game, records, removed);
+            try { if (Directory.Exists(old) && !Directory.EnumerateFileSystemEntries(old).Any()) Directory.Delete(old); }
+            catch (IOException) { }
+            return count;
+        }
+
         // Takes a removed package of the player's off the list.
         public static void Forget(string game, string key)
         {

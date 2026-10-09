@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 
 namespace ExMoreStuff
@@ -474,6 +475,79 @@ namespace ExMoreStuff
             string relative = Path.Combine(Folder, slot.File);
             var record = Installer.Load(game).FirstOrDefault(r => r.Files.Any(f => string.Equals(f, relative, StringComparison.OrdinalIgnoreCase)));
             return record == null ? null : record.Item.TitleNamed(record.Shown ?? record.Item.Name);
+        }
+
+        // -- the songs library: Music\ beside the program ---------------------------------------------------------
+        // Every song put in the game or saved is kept there, named for where it goes: <code>_<round>_<layer>_<song>, like
+        // TRN_3_MAIN_Jackson.mp3 (the song as it was opened), .json (its loop and settings) and .csb (the game file it
+        // made). A music mod with .csb files named that way goes in with Add Mod From File.
+        public static readonly string[] LayerTags = { "MAIN", "ULTRA", "LOWHP" };
+        static readonly Regex Tagged = new Regex(@"^([A-Za-z0-9]{3})_([123])_(MAIN|ULTRA|LOWHP)_(.+)$", RegexOptions.IgnoreCase);
+
+        /// <summary>The library name for a song on `slot`'s `layer`: TRN_3_MAIN_Jackson (a song already named that way
+        /// keeps only its own part).</summary>
+        public static string LibraryName(MusicSlot slot, int layer, string song)
+        {
+            Match m = Tagged.Match(song ?? "");
+            string name = m.Success ? m.Groups[4].Value : song;
+            foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            name = name.Trim();
+            if (name == "") name = "song";
+            return slot.Code + "_" + slot.Round + "_" + LayerTags[Math.Max(0, Math.Min(2, layer))] + "_" + name;
+        }
+
+        /// <summary>Keeps a song in the library (overwriting): the game file it made, and, when it came from a song file,
+        /// that file as it was and its loop and settings. Returns the name it was kept under.</summary>
+        public static string Keep(MusicSlot slot, int layer, string song, byte[] bank, string source, int loopStart, int loopEnd, string settings)
+        {
+            Directory.CreateDirectory(AppFolders.Music);
+            string name = LibraryName(slot, layer, song), stem = Path.Combine(AppFolders.Music, name);
+            File.WriteAllBytes(stem + ".csb", bank);
+            if (source != null && File.Exists(source) && !source.EndsWith(".csb", StringComparison.OrdinalIgnoreCase))
+            {
+                string copy = stem + Path.GetExtension(source).ToLowerInvariant();
+                if (!string.Equals(Path.GetFullPath(copy), Path.GetFullPath(source), StringComparison.OrdinalIgnoreCase)) File.Copy(source, copy, true);
+                File.WriteAllText(stem + ".json", new JavaScriptSerializer().Serialize(new Dictionary<string, object>
+                {
+                    { "format", 1 }, { "loopStart", loopStart }, { "loopEnd", loopEnd }, { "settings", settings },
+                }));
+            }
+            return name;
+        }
+
+        /// <summary>A song file's loop and settings kept beside it (TRN_3_MAIN_Jackson.json), or false.</summary>
+        public static bool ReadKept(string songFile, out int loopStart, out int loopEnd, out string settings)
+        {
+            loopStart = loopEnd = -1;
+            settings = null;
+            string json = Path.ChangeExtension(songFile, ".json");
+            if (!File.Exists(json)) return false;
+            try
+            {
+                var j = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(json));
+                loopStart = Convert.ToInt32(j["loopStart"]);
+                loopEnd = Convert.ToInt32(j["loopEnd"]);
+                settings = j.ContainsKey("settings") && j["settings"] != null ? Convert.ToString(j["settings"]) : null;
+                return loopEnd > loopStart && loopStart >= 0;
+            }
+            catch (Exception) { return false; }
+        }
+
+        /// <summary>Where a library-named game file goes: TRN_3_MAIN_Jackson.csb -> stage TRN, round 3 (its layer and
+        /// song name); RYU_1_MAIN_x.csb -> Ryu's theme. Null when the name isn't one.</summary>
+        public static MusicSlot TaggedSlot(string fileName, out int layer, out string song)
+        {
+            layer = 0;
+            song = null;
+            Match m = Tagged.Match(Path.GetFileNameWithoutExtension(fileName ?? ""));
+            if (!m.Success) return null;
+            string code = m.Groups[1].Value.ToUpperInvariant();
+            layer = Array.IndexOf(LayerTags, m.Groups[3].Value.ToUpperInvariant());
+            song = m.Groups[4].Value;
+            int round = int.Parse(m.Groups[2].Value);
+            if (Fighters.IsCode(code)) return round == 1 ? new MusicSlot { Code = code, Fighter = true } : null;
+            if (Array.IndexOf(Stages.Codes, code) < 0 && !Stages.IsCustomCode(code)) return null;
+            return new MusicSlot { Code = code, Round = round };
         }
 
         /// <summary>Puts a built bank in the patch folder for `slot` (replacing an earlier song of ours there).</summary>
