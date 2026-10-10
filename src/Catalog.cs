@@ -123,9 +123,25 @@ namespace ExMoreStuff
             return File.ReadAllText(source);
         }
 
-        // The latest EX More Stuff, if the catalog names it: "program": { "version": "0.2", "page": "https://..." }.
+        // The latest EX More Stuff, if the catalog names it: "program": { "version": "0.2", "page": "https://..." }, and
+        // optionally "download" (the zip itself); without it, the zip GitHub serves for that version's release
+        // (<page>/download/v0.2/EXMoreStuff-0.2.zip, as make_publish names it).
         public static Version ProgramVersion { get; private set; }
         public static string ProgramPage { get; private set; }
+        public static string ProgramDownload { get; private set; }
+
+        /// <summary>Whether `url` answers (a HEAD request, redirects followed): the release's zip is up.</summary>
+        public static async Task<bool> Reachable(string url)
+        {
+            try
+            {
+                using (var request = new HttpRequestMessage(HttpMethod.Head, url))
+                using (var cancel = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15)))
+                using (var response = await http.SendAsync(request, cancel.Token))
+                    return response.IsSuccessStatusCode;
+            }
+            catch (Exception) { return false; }
+        }
 
         public static async Task<List<Item>> Load(string source)
         {
@@ -140,6 +156,9 @@ namespace ExMoreStuff
             {
                 ProgramVersion = version;
                 ProgramPage = Convert.ToString(about["page"]);
+                string download = about.ContainsKey("download") ? Convert.ToString(about["download"]) : null;
+                ProgramDownload = download != null && download.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? download
+                                : ProgramPage.TrimEnd('/') + "/download/v" + version + "/EXMoreStuff-" + version + ".zip";
             }
             if (root != null && root.TryGetValue("items", out list) && list is System.Collections.ArrayList)
                 foreach (object entry in (System.Collections.ArrayList)list)

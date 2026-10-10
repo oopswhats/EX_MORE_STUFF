@@ -20,6 +20,9 @@ rem GameBanana's list as of this version, for when GameBanana can't be reached (
 echo -resource:res\gamebanana.json,gamebanana.json>> out\resources.rsp
 rem GameBanana's codes kept for good as of this version (the codes branch's codes.json), for when GitHub can't be reached
 echo -resource:res\codes.json,codes.json>> out\resources.rsp
+rem the game's costumes in every color (SF4 Ember's selection art, made small by test\EmberArt.cs): a sheet per costume
+(for %%f in (res\costumes\*.jpg) do @echo -resource:res\costumes\%%~nxf,costumes.%%~nxf) >> out\resources.rsp
+echo -resource:res\costumes\index.txt,costumes.index.txt>> out\resources.rsp
 rem the game's official update files (paths and sizes), so Advanced > Old mods can tell mods apart (test\OfficialManifest.cs)
 echo -resource:res\official.json,official.json>> out\resources.rsp
 "%CSC%" -nologo -target:winexe -platform:anycpu -optimize+ -langversion:7.3 -out:out\%OUT% ^

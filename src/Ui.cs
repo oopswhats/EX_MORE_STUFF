@@ -803,7 +803,7 @@ namespace ExMoreStuff
             this.wordmark = wordmark;
             System.Version v;
             this.version = System.Version.TryParse(version, out v) ? v.Major + "." + v.Minor : version;
-            Size = new Size(520, 210);
+            Size = new Size(520, 258);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -830,6 +830,8 @@ namespace ExMoreStuff
             Theme.Draw(g, "Round 2 and 3 music plays with Tom's Round BGM mod", Theme.Font(9f), Theme.Muted, new Rectangle(143, 138, Width - 160, 18), flags);
             Theme.Draw(g, "GameBanana files are verified safe: virus-scanned by GameBanana, checked on download, and only costume and stage files are used.",
                 Theme.Font(8f), Theme.Muted, new Rectangle(143, 162, Width - 160, 34), flags | TextFormatFlags.WordBreak);
+            Theme.Draw(g, "Costume pictures: SF4 Ember's selection art (photos by Street Fighter Galleries, EventHubs and the Street Fighter Wiki). Game art © Capcom.",
+                Theme.Font(8f), Theme.Muted, new Rectangle(143, 198, Width - 160, 50), flags | TextFormatFlags.WordBreak);
         }
     }
 

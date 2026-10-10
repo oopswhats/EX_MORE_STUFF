@@ -95,6 +95,20 @@ namespace ExMoreStuff
             }
         }
 
+        // Updating (the header's update link): an empty "Drag EXE to update.txt" beside the program, so the folder that opens
+        // says what to do; the next start (the new version) takes it away again. Only an empty one is ever deleted.
+        static string UpdateHint { get { return Path.Combine(Path.GetDirectoryName(System.Windows.Forms.Application.ExecutablePath), "Drag EXE to update.txt"); } }
+
+        public static void LeaveUpdateHint()
+        {
+            try { if (!File.Exists(UpdateHint)) File.WriteAllText(UpdateHint, ""); } catch (Exception) { }
+        }
+
+        public static void ClearUpdateHint()
+        {
+            try { if (File.Exists(UpdateHint) && new FileInfo(UpdateHint).Length == 0) File.Delete(UpdateHint); } catch (Exception) { }
+        }
+
         /// <summary>A package the player adds: copied into its folder in Mods\ (unless it's in Mods\ already: then
         /// Installer.AdoptPackages puts it in its place), so their own file can move or go without EX More Stuff losing it.
         /// Returns the copy's path.</summary>

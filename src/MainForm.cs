@@ -125,7 +125,8 @@ namespace ExMoreStuff
             disableAll.Location = new Point(apply.Left - disableAll.Width - 8, 19);
             refresh.Location = new Point(disableAll.Left - refresh.Width - 8, 19);
             status.Bounds = new Rectangle(18, 14, refresh.Left - 36, 20);
-            gameLabel.Bounds = new Rectangle(18, 36, refresh.Left - 100, 18);
+            gameLabelRoom = refresh.Left - 100;
+            gameLabel.Bounds = new Rectangle(18, 36, gameLabelRoom, 18);
             change.LinkClicked += (s, e) => ChooseGame();
             footer.Controls.AddRange(new Control[] { progress, status, gameLabel, change, refresh, disableAll, apply });
             refresh.Click += async (s, e) => await RefreshAll();
@@ -185,7 +186,7 @@ namespace ExMoreStuff
             Load += async (s, e) => await Start();
             FormClosing += (s, e) =>
             {
-                if (Pending() > 0 && MessageBox.Show(this, "You have changes that aren't applied yet. Close anyway?", Text,
+                if (!closingToUpdate && Pending() > 0 && MessageBox.Show(this, "You have changes that aren't applied yet. Close anyway?", Text,
                         MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) e.Cancel = true;
             };
         }
@@ -209,6 +210,7 @@ namespace ExMoreStuff
         async Task Start()
         {
             BuildAdvanced();
+            AppFolders.ClearUpdateHint();   // left by the update link: this is the new version
             game = Settings.GameFolder;
             if (!Game.IsGameFolder(game)) game = Game.Find();
             if (!Game.IsGameFolder(game)) { Opacity = 1; if (!ChooseGame()) { Close(); return; } }
@@ -312,10 +314,41 @@ namespace ExMoreStuff
             };
             link.Location = new Point(tagline.Left, tagline.Top + (tagline.Height - TextRenderer.MeasureText(link.Text, link.Font).Height) / 2);
             tagline.Visible = false;
-            link.LinkClicked += (s, e) => System.Diagnostics.Process.Start(Catalog.ProgramPage);
+            link.LinkClicked += async (s, e) => await UpdateProgram();
             tips.SetToolTip(link, "Get the new EX More Stuff: " + Catalog.ProgramPage);
             header.Controls.Add(link);
             link.BringToFront();
+        }
+
+        // The update link: asked first. On Yes, once nothing is working (an install, Apply, a download ... finishes first,
+        // and any open question is answered), the program's folder opens with EXMoreStuff.exe picked, the new version's zip
+        // starts downloading in the browser (its release page instead, if the zip isn't up yet), and EX More Stuff closes
+        // so the new exe can take this one's place.
+        bool updating, closingToUpdate;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        static extern bool IsWindowEnabled(IntPtr window);   // false while a message box is open over the window
+
+        async Task UpdateProgram()
+        {
+            if (updating) return;
+            int pending = Pending();
+            string exe = Application.ExecutablePath;
+            if (MessageBox.Show(this, "Update to EX More Stuff " + Catalog.ProgramVersion + "?\n\n" +
+                    "EX More Stuff closes" + (locked ? " once what it's doing now is finished" : "") + ", its folder opens with EXMoreStuff.exe selected, " +
+                    "and the new version starts downloading in your browser.\n\nOpen the zip and put its EXMoreStuff.exe in place of this one. " +
+                    "Your mods, songs and settings stay as they are." +
+                    (pending > 0 ? "\n\nYour " + pending + " change" + (pending > 1 ? "s" : "") + " waiting for Apply won't be applied." : ""),
+                    Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) return;
+            updating = true;
+            if (locked) SetStatus("Updating: EX More Stuff closes when what it's doing is finished...");
+            var zipUp = Catalog.Reachable(Catalog.ProgramDownload);   // checked meanwhile
+            while (locked || !IsWindowEnabled(Handle)) await Task.Delay(300);
+            AppFolders.LeaveUpdateHint();   // "Drag EXE to update.txt" beside it, gone again when the new one starts
+            try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + exe + "\""); } catch (Exception) { }
+            try { System.Diagnostics.Process.Start(await zipUp ? Catalog.ProgramDownload : Catalog.ProgramPage); } catch (Exception) { }
+            closingToUpdate = true;   // the question about changes not applied was part of this one
+            Close();
         }
 
         bool ChooseGame()
@@ -339,12 +372,17 @@ namespace ExMoreStuff
             return Game.IsGameFolder(game);
         }
 
+        int gameLabelRoom;   // the most the game folder's line may take, left of the footer's buttons
+
         void ShowGame()
         {
             gameLabel.Text = "Game folder: " + game;
             musicPage.SetGame(game);
-            int width = Math.Min(gameLabel.Width, TextRenderer.MeasureText(gameLabel.Text, gameLabel.Font).Width);
+            // the label only as wide as its text (it's see-through, and would hide the Change link under it)
+            int width = Math.Min(gameLabelRoom, TextRenderer.MeasureText(gameLabel.Text, gameLabel.Font).Width);
+            gameLabel.Width = width;
             change.Location = new Point(gameLabel.Left + width + 2, gameLabel.Top);
+            change.BringToFront();
         }
 
         void ShowTab(TabButton tab)
@@ -634,7 +672,7 @@ namespace ExMoreStuff
                                            "The game's alternates and DLC costumes can't stand in for another.", width));
                 Image portrait;
                 portraits.TryGetValue(code, out portrait);
-                var grid = new CostumeGrid(width) { Costumes = gameCostumes, Portrait = portrait };
+                var grid = new CostumeGrid(width) { Costumes = gameCostumes, Fighter = code, Portrait = portrait };
                 grid.PlaysAs = n => { int s = Swap(wantedSwaps, CostumeSwaps.Key(code, n)); return s == 0 ? null : CostumeLabel(code, s); };
                 grid.Clicked += n => ChooseCostume(code, n);
                 grid.Lay();
