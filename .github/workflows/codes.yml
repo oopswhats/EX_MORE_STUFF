@@ -1,0 +1,41 @@
+# Every hour: GameBanana's shared codes, kept for good in codes.json on the "codes" branch (tools/CodeTracker.cs).
+# EX More Stuff reads that file, so a code stays taken even after its mod is deleted from GameBanana.
+name: GameBanana codes
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: codes
+jobs:
+  codes:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: codes
+          path: data
+      - name: Build the tracker
+        shell: pwsh
+        run: |
+          $csc = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -find "MSBuild\**\Bin\Roslyn\csc.exe" | Select-Object -First 1
+          $fw = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319"
+          $refs = "System", "System.Core", "System.Drawing", "System.Windows.Forms", "System.IO.Compression", "System.IO.Compression.FileSystem",
+                  "System.Net.Http", "System.Web.Extensions", "Microsoft.VisualBasic" | ForEach-Object { "-r:$fw\$_.dll" }
+          & $csc -nologo -target:exe -platform:anycpu -langversion:7.3 -out:tracker.exe -main:ExMoreStuff.CodeTracker @refs tools\CodeTracker.cs src\*.cs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Read GameBanana
+        shell: pwsh
+        run: .\tracker.exe data\codes.json
+      - name: Save
+        shell: pwsh
+        run: |
+          cd data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add codes.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) { git commit -m "GameBanana codes"; git push }
+          exit 0

@@ -18,7 +18,7 @@ if (Test-Path $publish) { [IO.Directory]::Delete($publish, $true) }
 $repo = Join-Path $publish "repo"
 New-Item -ItemType Directory -Force $repo | Out-Null
 foreach ($file in "README.md", "LICENSE", ".gitignore", "catalog.json", "build.bat", "make_assets.ps1", "make_publish.ps1") { Copy-Item "$root\$file" "$repo\$file" }
-foreach ($folder in "src", "res", "art") { Copy-Item "$root\$folder" "$repo\$folder" -Recurse }
+foreach ($folder in "src", "res", "art", "tools", ".github") { Copy-Item "$root\$folder" "$repo\$folder" -Recurse }   # .github: the hourly GameBanana codes job (codes.json lives on the "codes" branch, never here)
 New-Item -ItemType Directory -Force "$repo\test" | Out-Null
 Copy-Item "$root\test\*.cs" "$repo\test\"
 
