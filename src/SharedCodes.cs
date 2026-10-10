@@ -60,7 +60,7 @@ namespace ExMoreStuff
             string given;
             if (!Stages.IsCustomCode(code)) return GivenStages.TryGetValue(mod.Id, out given) ? given : null;
             GameBanana.Mod holder;
-            return HeldBy.TryGetValue("stage " + code, out holder) && holder.Id == mod.Id && !Catalog.NotFree(true, code, 0) ? code : null;
+            return HeldBy.TryGetValue("stage " + code, out holder) && holder.Id == mod.Id && !Catalog.NotFree(true, code, 0) && !Catalog.PersonalSeat(true, code, 0) ? code : null;
         }
 
         public static string Code(string fighter, int slot) { return fighter + " " + slot.ToString("D2"); }
@@ -79,6 +79,7 @@ namespace ExMoreStuff
         {
             var holders = new Dictionary<string, GameBanana.Mod>();
             var list = mods.ToList();
+            list.AddRange(CodeHistory.Gone(list));   // mods deleted from GameBanana keep their codes
             foreach (var given in Given)
             {
                 var mod = list.FirstOrDefault(m => m.Id == given.Key);
@@ -111,7 +112,7 @@ namespace ExMoreStuff
         /// <summary>The shared slot a mod's costume goes in (the one it replaces, or its own code), or 0: a personal one.</summary>
         public static int Slot(GameBanana.Mod mod, string fighter, int number, Dictionary<string, GameBanana.Mod> holders)
         {
-            if (number > Catalog.LastShared) return 0;   // not free
+            if (number > Catalog.LastShared) return 0;   // a personal seat, or not free
             if (number >= Catalog.FirstCustomCostume)
             {
                 GameBanana.Mod holder;

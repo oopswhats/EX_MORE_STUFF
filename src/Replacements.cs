@@ -64,8 +64,8 @@ namespace ExMoreStuff
             return File.Exists(path) ? path : null;
         }
 
-        // Why `stage` can't play as `source` (or null; with no source, whether the stage can be replaced at all): both
-        // must be scenery only, since one PC sees the stage and the other its own, and the source needs both files.
+        // Why `stage` can't play as `source` (or null; with no source, whether the stage can be replaced at all): their
+        // files must be there, and the source needs both.
         public static string Problem(string game, string stage, string source, Func<string, string> name)
         {
             foreach (var check in source == null || source == stage ? new[] { stage } : new[] { stage, source })
@@ -73,9 +73,6 @@ namespace ExMoreStuff
                 string emz = SourceFile(game, check, ".emz");
                 if (emz == null) return name(check) + "'s files weren't found.";
                 if (check == source && SourceFile(game, check, ".tex.emz") == null) return name(check) + " has no textures file (STG_" + check + ".tex.emz).";
-                if (StagePack.GameplayCalls(emz).Count > 0)
-                    return name(check) + (check == stage ? " can't be replaced" : " can't be used") +
-                           ": its scripts change where the fighters stand, so the two players' matches would play differently online.";
             }
             return null;
         }

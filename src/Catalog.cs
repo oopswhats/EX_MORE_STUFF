@@ -86,7 +86,9 @@ namespace ExMoreStuff
 
     static class Catalog
     {
-        public const int FirstCustomCostume = 8, LastShared = 84, LastSlot = 99;
+        // Costume slots: 8-79 GameBanana's shared seats; 80-84 kept for players' own mods (5 per fighter: not shared, so
+        // a mod added from a file never meets a GameBanana upload there); 85-99 not free.
+        public const int FirstCustomCostume = 8, LastShared = 79, FirstPersonal = 80, LastPersonal = 84, LastSlot = 99;
         // New colors of any costume: 30-99 (after the game's own, which go up to 22). Not shared: any free number.
         public const int FirstCustomColor = 30, LastColor = 99;
 
@@ -96,7 +98,16 @@ namespace ExMoreStuff
 
         public static bool NotFree(bool stage, string code, int slot)
         {
-            return stage ? NotFreeStage.IsMatch(code ?? "") : slot > LastShared && slot <= LastSlot;
+            return stage ? NotFreeStage.IsMatch(code ?? "") : slot > LastPersonal && slot <= LastSlot;
+        }
+
+        // Kept for players' own mods (not on GameBanana): costume slots 80-84, and stage codes of one U with two digits
+        // (U12, 1U2, 12U). Mods added from a file go there first; sharing one in them is allowed after a warning.
+        static readonly Regex PersonalStage = new Regex(@"^(?:U\d\d|\dU\d|\d\dU)$");
+
+        public static bool PersonalSeat(bool stage, string code, int slot)
+        {
+            return stage ? PersonalStage.IsMatch(code ?? "") : slot >= FirstPersonal && slot <= LastPersonal;
         }
 
         public static bool NotFree(Item item) { return NotFree(item.IsStage, item.Code, item.Slot); }

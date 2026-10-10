@@ -121,7 +121,10 @@ namespace ExMoreStuff
         public static int FreeSlot(string game, string fighter)
         {
             var taken = new HashSet<int>(Installer.Load(game).Concat(Installer.Removed(game)).Where(r => r.Item.IsCostume && r.Item.Fighter == fighter).Select(r => r.Item.Slot));
-            for (int slot = Catalog.LastShared; slot >= Catalog.FirstCustomCostume; slot--)
+            // the personal seats first (84 down to 80), then the shared ones from 79 down
+            var order = Enumerable.Range(Catalog.FirstPersonal, Catalog.LastPersonal - Catalog.FirstPersonal + 1).Reverse()
+                .Concat(Enumerable.Range(Catalog.FirstCustomCostume, Catalog.LastShared - Catalog.FirstCustomCostume + 1).Reverse());
+            foreach (int slot in order)
                 if (!taken.Contains(slot) && !SharedCodes.Held.Contains(SharedCodes.Code(fighter, slot)) && !File.Exists(Path.Combine(Game.PatchFolder(game), "battle", "chara", fighter, fighter + "_" + slot.ToString("D2") + ".obj.emo")))
                     return slot;
             return 0;

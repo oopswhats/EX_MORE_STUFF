@@ -461,13 +461,13 @@ namespace ExMoreStuff
                     Installed again = records.FirstOrDefault(r => r.Item.Id == id);
                     int slot = again != null ? again.Item.Slot : SharedCodes.Slot(mod, costume.Fighter, costume.Number, holders);
                     if (slot == 0) { slot = SkinImport.FreeSlot(g, costume.Fighter); personal = true; }
-                    if (slot == 0) throw new InvalidOperationException(Fighters.Name(costume.Fighter) + " has no free slot left in " + Catalog.FirstCustomCostume + "-" + Catalog.LastShared);
+                    if (slot == 0) throw new InvalidOperationException(Fighters.Name(costume.Fighter) + " has no free slot left in " + Catalog.FirstCustomCostume + "-" + Catalog.LastPersonal);
                     Installed other = records.FirstOrDefault(r => r.Item.IsCostume && r.Item.Fighter == costume.Fighter && r.Item.Slot == slot && r.Item.Id != id);
                     if (other != null)
                         throw new InvalidOperationException("your " + Fighters.Name(other.Item.Fighter) + " " + other.Item.TitleNamed(other.Shown ?? other.Item.Name) +
                                                             " is in the code this skin shares with everyone; give yours another code in Advanced > Package codes first");
                     string name = Regex.Replace(mod.Name, @"[^\w\s\-\.\(\)]", "").Trim();
-                    string zip = Path.Combine(AppFolders.Mods, name + " - " + costume.Fighter + " " + slot.ToString("D2") + ".zip");
+                    string zip = Path.Combine(AppFolders.FighterPackages(costume.Fighter), name + " - " + costume.Fighter + " " + slot.ToString("D2") + ".zip");
                     var item = new Item
                     {
                         Id = id, Type = "costume", Fighter = costume.Fighter, Slot = slot, Code = "", Name = mod.Name, Author = mod.Author, Version = Signature(mod),
@@ -507,7 +507,7 @@ namespace ExMoreStuff
 
         // Before anything downloads: a seat this mod shares with everyone (a costume slot, a stage code) that one of the
         // player's own packages is in now. The player is asked to move theirs to a free seat (counting down from 84, or
-        // C80-C99 for a stage); Package codes' move does it (its zip rewritten, its name kept). False: not installed.
+        // a personal U code for a stage); Package codes' move does it (its zip rewritten, its name kept). False: not installed.
         async Task<bool> MakeRoom(GameBanana.Mod mod)
         {
             string g = game, ours = "gamebanana:" + mod.Id + ":";
@@ -597,12 +597,13 @@ namespace ExMoreStuff
         /// <summary>Installs a mod file (Advanced > Add Mod From File for anything that isn't an EX More Stuff package, or
         /// a file dropped here): a GameBanana file points to its card (its shared code), anything else goes in as it is,
         /// in personal slots and codes.</summary>
-        public async Task InstallFile(string path)
+        /// <summary>Installs a mod file (Add Mod From File, or dropped here). Returns null when it went in, else why not.</summary>
+        public async Task<string> InstallFile(string path)
         {
             string blocked = CantInstall();
-            if (blocked != null) { Say("Can't install it now: " + blocked, true); return; }
+            if (blocked != null) { Say("Can't install it now: " + blocked, true); return "can't install it now: " + blocked; }
             SetWorking(true);
-            string g = game, done = null;
+            string g = game, done = null, problem = null;
             try
             {
                 string md5 = await Task.Run(() => ModFile.Md5(path));
@@ -610,8 +611,11 @@ namespace ExMoreStuff
                 if (same != null)
                 {
                     Highlight("gamebanana:" + same.Id + ":");
-                    Say("That file is " + same.Name + " from GameBanana: press Install on its card (below) so it goes in its shared code");
-                    return;
+                    bool installed = Installer.Load(g).Concat(Installer.Removed(g)).Any(r => r.Item.Id.StartsWith("gamebanana:" + same.Id + ":"));
+                    problem = installed ? "it's " + same.Name + " from GameBanana, already installed"
+                                        : "it's " + same.Name + " from GameBanana: press Install on its card (Browse Mods) so it goes in its shared code";
+                    Say("That file is " + same.Name + " from GameBanana: " + (installed ? "it's already installed" : "press Install on its card (below) so it goes in its shared code"));
+                    return problem;
                 }
                 Action<string> say = text => BeginInvoke((Action)(() => Say(text)));
                 var result = await Task.Run(() => ModFile.Install(g, path, null, null, "", null, null, say));
@@ -619,9 +623,10 @@ namespace ExMoreStuff
                 done = ModFile.NameFrom(path) + " is in: " + string.Join(", ", result.Into) + " (only you see it)" +
                        (result.Problems.Count > 0 ? ". Not put in: " + string.Join("; ", result.Problems) : "");
             }
-            catch (Exception ex) { Say("It wasn't installed: " + ex.Message, true); }
+            catch (Exception ex) { problem = ex.Message; Say("It wasn't installed: " + ex.Message, true); }
             finally { SetWorking(false); }
             Finished(done);
+            return problem;
         }
 
         void Finished(string done)

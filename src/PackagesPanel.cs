@@ -64,7 +64,8 @@ namespace ExMoreStuff
                 ShadowLabel.Note("Your own costume, color and stage packages (added from a zip). Change a stage's code, a costume's slot or a new color's number (30-99) here: " +
                      "its zip is updated too, ready to share. Stage codes are three capital letters or digits that aren't the game's " +
                      "(C01-C99 are the catalog's); costume slots are " + Catalog.FirstCustomCostume + "-" + Catalog.LastSlot + ". Share yours in " + Catalog.FirstCustomCostume + "-" +
-                     Catalog.LastShared + "; " + (Catalog.LastShared + 1) + "-" + Catalog.LastSlot + " aren't free, nor are stage codes of one A or T with two digits (A12, 1A2, 12A, T12 ...).", width),
+                     Catalog.LastShared + "; " + Catalog.FirstPersonal + "-" + Catalog.LastPersonal + " and stage codes U12, 1U2, 12U ... are kept for your own mods; " +
+                     (Catalog.LastPersonal + 1) + "-" + Catalog.LastSlot + " aren't free, nor are stage codes of one A or T with two digits (A12, 1A2, 12A, T12 ...).", width),
             };
             status.Width = width - 16;
             controls.Add(status);
@@ -124,9 +125,16 @@ namespace ExMoreStuff
             return item.IsStage ? Replacements.Load(game).Where(r => r.Source == item.Code).Select(r => r.Stage).ToList() : new List<string>();
         }
 
+        // the game costumes a custom costume stands in for (the Costumes page's replace): deleting it gives them their own back
+        static List<int> CostumesStandingIn(string game, Item item)
+        {
+            return item.IsCostume ? CostumeSwaps.Load(game).Where(s => s.Fighter == item.Fighter && s.Source == item.Slot).Select(s => s.Costume).ToList() : new List<int>();
+        }
+
         public static string DeleteQuestion(string game, Installed record, string title)
         {
             Item item = record.Item;
+            var costumes = CostumesStandingIn(game, item).Select(CostumeGrid.CostumeName).ToList();
             bool inGame = Installer.Load(game).Any(r => r.Item.Key == item.Key), recycle = RecyclesZip(game, record);
             bool kept = !recycle && !string.IsNullOrEmpty(record.Package);
             var standing = StandingIn(game, item).Select(Stages.Name).ToList();
@@ -135,6 +143,8 @@ namespace ExMoreStuff
                    (item.IsStage ? ", with any songs you put on " + item.Code + " on the Music page" : "") + ".\n" +
                    (standing.Count > 0 ? string.Join(" and ", standing) + (standing.Count > 1 ? ", which play as it now, get their own stages back.\n"
                                                                                            : ", which plays as it now, gets its own stage back.\n") : "") +
+                   (costumes.Count > 0 ? Fighters.Name(item.Fighter) + "'s " + string.Join(" and ", costumes) + (costumes.Count > 1 ? ", which play as it now, get their own costumes back.\n"
+                                                                                                                                  : ", which plays as it now, gets its own costume back.\n") : "") +
                    (recycle ? "Its zip (" + Path.GetFileName(record.Package) + ") goes to the Recycle Bin." :
                     kept && File.Exists(record.Package) ? "Its zip stays: another package uses it." : kept ? "Its zip isn't where it was, so nothing else is touched." : "");
         }
@@ -147,6 +157,11 @@ namespace ExMoreStuff
             {
                 string kept = Replacements.Restore(game, stage);
                 if (kept != null) notes.Add(Stages.Name(stage) + ": " + kept);
+            }
+            foreach (int costume in CostumesStandingIn(game, record.Item))
+            {
+                string kept = CostumeSwaps.Restore(game, record.Item.Fighter, costume);
+                if (kept != null) notes.Add(Fighters.Name(record.Item.Fighter) + "'s " + CostumeGrid.CostumeName(costume) + ": " + kept);
             }
             Installer.Purge(game, record.Item.Key);
             string songs = record.Item.IsStage ? MusicBank.RemoveCode(game, record.Item.Code) : null;

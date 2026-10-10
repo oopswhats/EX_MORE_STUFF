@@ -80,8 +80,17 @@ namespace ExMoreStuff
 
         public static Task<List<Mod>> All()
         {
-            if (all == null || all.IsFaulted || all.IsCanceled) all = ReadOrKept();
+            if (all == null || all.IsFaulted || all.IsCanceled) all = ReadWithHistory();
             return all;
+        }
+
+        // the list, and meanwhile the codes kept for good (CodeHistory), so holders are worked out with both
+        static async Task<List<Mod>> ReadWithHistory()
+        {
+            Task history = CodeHistory.Refresh();
+            var mods = await ReadOrKept();
+            try { await history; } catch (Exception) { }
+            return mods;
         }
 
         static string KeptFile { get { return AppFolders.DataFile("gamebanana.json"); } }

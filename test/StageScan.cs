@@ -33,11 +33,6 @@ namespace ExMoreStuff
                         file.Length / 1048576.0, path.Contains("patch_ae2_tu3") ? " [patch]" : "");
                     if (suffix == ".emz")
                     {
-                        var calls = StagePack.GameplayCallsIn(file);
-                        line.Append(calls.Count > 0 ? " CALLS " + string.Join(",", calls) : " scenery only");
-                        foreach (var lua in GameArt.ReadContainer(GameArt.Unpack(file)))
-                            foreach (string call in calls)
-                                if (lua.Key.EndsWith(".lua") && Encoding.ASCII.GetString(lua.Value).Contains(call)) line.Append("\n    " + call + " in " + lua.Key);
                         foreach (var entry in GameArt.ReadContainer(GameArt.Unpack(file)))
                             if (entry.Key.EndsWith(".lua", StringComparison.OrdinalIgnoreCase))
                             {

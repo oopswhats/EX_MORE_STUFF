@@ -653,6 +653,7 @@ namespace ExMoreStuff
                 kept = MusicBank.Keep(target, layerIndex, name, BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, out about), source, ls, le, settings);
             })) return;
             Say("Saved as " + kept + " in your songs folder (the folder button)");
+            Toast.Show(this, "Songs saved to disk");   // always "songs" (user)
         }
 
         void Restore()

@@ -18,6 +18,10 @@ rem Tom's Round BGM mod (dinput8.dll), put next to SSFIV.exe with round 2/3 musi
 echo -resource:res\roundbgm\dinput8.dll,roundbgm.dll>> out\resources.rsp
 rem GameBanana's list as of this version, for when GameBanana can't be reached (test\GameBananaSnapshot.cs refreshes it)
 echo -resource:res\gamebanana.json,gamebanana.json>> out\resources.rsp
+rem GameBanana's codes kept for good as of this version (the codes branch's codes.json), for when GitHub can't be reached
+echo -resource:res\codes.json,codes.json>> out\resources.rsp
+rem the game's official update files (paths and sizes), so Advanced > Old mods can tell mods apart (test\OfficialManifest.cs)
+echo -resource:res\official.json,official.json>> out\resources.rsp
 "%CSC%" -nologo -target:winexe -platform:anycpu -optimize+ -langversion:7.3 -out:out\%OUT% ^
   -win32icon:src\app.ico -win32manifest:src\app.manifest ^
   -r:"%FW%\System.dll" -r:"%FW%\System.Core.dll" -r:"%FW%\System.Drawing.dll" -r:"%FW%\System.Windows.Forms.dll" ^

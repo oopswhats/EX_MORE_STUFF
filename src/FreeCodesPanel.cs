@@ -101,8 +101,9 @@ namespace ExMoreStuff
             if (heading != null) { heading.Dispose(); note.Dispose(); stageNote.Dispose(); }
             heading = new Heading("Free codes", width);
             note = ShadowLabel.Note("Making a costume or stage to share on GameBanana? Check its code here first. Costume slots " + Catalog.FirstCustomCostume + "-" + Catalog.LastShared +
-                        " are for sharing; a slot or code the game has, one a mod on GameBanana already uses, or one that isn't free shows a warning. Hover a taken seat to see whose it is.", width);
-            stageNote = ShadowLabel.Note("Stage codes are three letters or digits that aren't one of the game's (C01-C99 are the catalog's).", width);
+                        " are for sharing; " + Catalog.FirstPersonal + "-" + Catalog.LastPersonal + " are kept for players' own mods. A slot or code the game has, one a mod on GameBanana already uses, " +
+                        "one kept for players' own mods or one that isn't free shows a warning. Hover a taken seat to see whose it is.", width);
+            stageNote = ShadowLabel.Note("Stage codes are three letters or digits that aren't one of the game's (C01-C99 are the catalog's); U12, 1U2, 12U ... are kept for players' own mods.", width);
             foreach (Control c in new Control[] { costumeRow, stageRow, status }) c.Width = width - 16;
             grid.Width = width - 16;
             list.SuspendLayout();
@@ -154,7 +155,7 @@ namespace ExMoreStuff
 
         // the legend: a swatch painted here, its word a shadowed label like the page's other text
         static readonly Tuple<Color, string>[] Legend = { Tuple.Create(Theme.Card, "free"), Tuple.Create(Color.FromArgb(170, Theme.Accent), "taken on GameBanana"),
-                                                          Tuple.Create(Theme.Well, "not free") };
+                                                          Tuple.Create(Color.FromArgb(170, Theme.OwnBadge), "your own mods"), Tuple.Create(Theme.Well, "not free") };
         readonly ShadowLabel[] words;
 
         public SeatGrid()
@@ -223,8 +224,10 @@ namespace ExMoreStuff
                 int n = Catalog.FirstCustomCostume + i;
                 var kind = Seats.Costume(Fighter, n).Kind;
                 Rectangle chip = ChipAt(i);
-                Color fill = kind == Seats.Kind.Held ? Color.FromArgb(170, Theme.Accent) : kind == Seats.Kind.NotFree ? Theme.Well : Theme.Card;
-                Color text = kind == Seats.Kind.Held ? Theme.OnAccent : kind == Seats.Kind.NotFree ? Color.FromArgb(90, Theme.Muted) : Theme.GoodText;
+                Color fill = kind == Seats.Kind.Held ? Color.FromArgb(170, Theme.Accent) : kind == Seats.Kind.Personal ? Color.FromArgb(170, Theme.OwnBadge)
+                           : kind == Seats.Kind.NotFree ? Theme.Well : Theme.Card;
+                Color text = kind == Seats.Kind.Held ? Theme.OnAccent : kind == Seats.Kind.Personal ? Color.White
+                           : kind == Seats.Kind.NotFree ? Color.FromArgb(90, Theme.Muted) : Theme.GoodText;
                 using (var path = Theme.Rounded(new RectangleF(chip.X + 0.5f, chip.Y + 0.5f, chip.Width - 1, chip.Height - 1), 6))
                 {
                     using (var brush = new SolidBrush(n == hover ? ControlPaint.Light(fill, 0.15f) : fill)) g.FillPath(brush, path);

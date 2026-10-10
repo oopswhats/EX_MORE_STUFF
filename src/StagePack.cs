@@ -33,38 +33,6 @@ namespace ExMoreStuff
             return null;
         }
 
-        // Script calls that change where fighters stand or what they collide with (floor height, turn area, bonus
-        // collisions; research/custom_dlc/FINDINGS.md). A stage that plays as another on one PC only must not make
-        // them, or the two PCs' fights would differ; no game stage makes them. The ships' rocking deck
-        // (Util.SetGroundRotate, VIE/VNX_ShipCtrl.lua) is only a look: one PC on a rocking Beautiful Bay and the other
-        // on a still stage played without a desync (two-copy test, 2026-10-08).
-        static readonly string[] Watched = { "SetFloorHeight", "SetTurnEnableArea", "Bonus" };
-
-        static readonly Dictionary<string, List<string>> checkedFiles = new Dictionary<string, List<string>>();
-
-        // GameplayCallsIn for a stage's .emz on disk, remembered while the file stays the same.
-        public static List<string> GameplayCalls(string path)
-        {
-            var info = new FileInfo(path);
-            string key = path + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks;
-            List<string> found;
-            lock (checkedFiles) if (checkedFiles.TryGetValue(key, out found)) return found;
-            found = GameplayCallsIn(File.ReadAllBytes(path));
-            lock (checkedFiles) checkedFiles[key] = found;
-            return found;
-        }
-
-        // The gameplay calls a stage's scripts make (empty for a stage that is only scenery).
-        public static List<string> GameplayCallsIn(byte[] emz)
-        {
-            var found = new List<string>();
-            foreach (var entry in GameArt.ReadContainer(GameArt.Unpack(emz)))
-                if (entry.Key.EndsWith(".lua", StringComparison.OrdinalIgnoreCase))
-                    foreach (string call in Watched)
-                        if (!found.Contains(call) && IndexOf(entry.Value, Encoding.ASCII.GetBytes(call)) >= 0) found.Add(call);
-            return found;
-        }
-
         // A stage file under another code. The container keeps its header and alignment; a compressed (#EMZ) file
         // is compressed again.
         public static byte[] Recode(byte[] file, string from, string to)

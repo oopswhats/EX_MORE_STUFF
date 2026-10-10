@@ -86,17 +86,68 @@ namespace ExMoreStuff
             string mine = ColorZip(Path.Combine(scratch, "my zips", "Mine.zip"), "RYU_01_31", col, emm);
             Installer.InstallPackage(game, Installer.Package(built), built, "file");
             Installer.InstallPackage(game, Installer.Package(mine), mine, "file");
-            Check(Installer.AdoptPackages(game, AppFolders.Mods) == 2, "two came");
+            Check(Installer.AdoptPackages(game) == 2, "two came");
             var records = Installer.Load(game);
-            Check(records.All(r => r.Package == null || AppFolders.Inside(r.Package, AppFolders.Mods)) && records.Where(r => r.Package != null).All(r => File.Exists(r.Package)),
-                  "both packages now point into Mods\\");
+            string ryu = Path.Combine(AppFolders.Mods, "Characters", "Ryu");
+            Check(records.All(r => r.Package == null || Path.GetDirectoryName(r.Package) == ryu) && records.Where(r => r.Package != null).All(r => File.Exists(r.Package)),
+                  "both packages now point into Mods\\Characters\\Ryu");
             Check(!File.Exists(built) && !Directory.Exists(Path.Combine(patch, "ex_more_stuff_mods")) && File.Exists(mine),
                   "EX More Stuff's own build moved (its old folder gone); the player's own zip copied, still where it was");
-            Check(Installer.AdoptPackages(game, AppFolders.Mods) == 0, "a second start: nothing to do");
-            string again = AppFolders.KeepPackage(mine);
-            Check(AppFolders.Inside(again, AppFolders.Mods) && Path.GetFileName(again) == "Mine.zip", "a package added from a file: the copy already in Mods\\ is used");
+            Check(Installer.AdoptPackages(game) == 0, "a second start: nothing to do");
+            string again = AppFolders.KeepPackage(mine, Installer.Package(mine));
+            Check(Path.GetDirectoryName(again) == ryu && Path.GetFileName(again) == "Mine.zip", "a package added from a file: the copy already in Mods\\ is used");
             string other = ColorZip(Path.Combine(scratch, "elsewhere", "Mine.zip"), "RYU_01_32", col, emm);
-            Check(Path.GetFileName(AppFolders.KeepPackage(other)) == "Mine (2).zip", "another zip with the same name: Mine (2).zip");
+            Check(Path.GetFileName(AppFolders.KeepPackage(other, Installer.Package(other))) == "Mine (2).zip", "another zip with the same name: Mine (2).zip");
+            string loose = ColorZip(Path.Combine(AppFolders.Mods, "Loose.zip"), "SKR_01_30", col, emm);
+            Installer.InstallPackage(game, Installer.Package(loose), AppFolders.KeepPackage(loose, Installer.Package(loose)), "file");
+            Check(Installer.AdoptPackages(game) == 1 && !File.Exists(loose) && File.Exists(Path.Combine(AppFolders.Mods, "Characters", "Sakura", "Loose.zip")) &&
+                  Installer.Load(game).Any(r => r.Package == Path.Combine(AppFolders.Mods, "Characters", "Sakura", "Loose.zip")),
+                  "a zip lying in Mods\\ itself: moved to Characters\\Sakura, its package pointing there");
+
+            Console.WriteLine("Adding the same file again");
+            string renamed = Path.Combine(scratch, "elsewhere", "Mine renamed.zip");
+            File.Copy(mine, renamed);
+            Check(Installer.AddedBefore(game, mine) != null && Installer.AddedBefore(game, renamed) != null, "Mine.zip, and a copy under another name: added before");
+            Check(Installer.AddedBefore(game, other) == null, "another zip (not added): not a duplicate");
+
+            Console.WriteLine("A zip deleted from Mods\\ by hand");
+            Check(Installer.MissingPackages(game).Count == 0, "none missing yet");
+            string sakuraZip = Path.Combine(AppFolders.Mods, "Characters", "Sakura", "Loose.zip");
+            File.Delete(sakuraZip);
+            var missing = Installer.MissingPackages(game);
+            Check(missing.Count == 1 && missing[0].Item.Key == "color:SKR:1:30", "Sakura's color 30 found missing its zip");
+            Settings.GameFolder = game;
+            Settings.KeptWithoutZip = new List<string> { "color:SKR:1:30" };
+            Check(Settings.GameFolder == game && Settings.KeptWithoutZip.SequenceEqual(new[] { "color:SKR:1:30" }), "\"No\" remembered in settings.json beside the game folder");
+            string sakuraCol = Path.Combine(patch, "battle", "chara", "SKR", "SKR_01_30.col.emb");
+            Check(File.Exists(sakuraCol), "its files still in the game");
+            PackagesPanel.PurgeForGood(game, missing[0]);
+            Check(!File.Exists(sakuraCol) && Installer.MissingPackages(game).Count == 0 && !Installer.Load(game).Any(r => r.Item.Key == "color:SKR:1:30"),
+                  "\"Yes\": out of the game and off the list, as with the trash can");
+
+            Console.WriteLine("Seats kept for players' own mods");
+            Check(Seats.Costume("JHA", 82).Kind == Seats.Kind.Personal && Seats.Costume("JHA", 79).Kind == Seats.Kind.Free && Seats.Costume("JHA", 85).Kind == Seats.Kind.NotFree,
+                  "Abel 80-84 personal, 79 shared, 85 not free");
+            Check(Seats.Stage("U12").Kind == Seats.Kind.Personal && Seats.Stage("1U2").Kind == Seats.Kind.Personal && Seats.Stage("12U").Kind == Seats.Kind.Personal &&
+                  Seats.Stage("UU1").Kind == Seats.Kind.Free, "stage codes U12, 1U2, 12U personal; UU1 free");
+            Check(Seats.Warning(new Item { Type = "costume", Fighter = "JHA", Slot = 82 }) == null && Seats.Warning(new Item { Type = "stage", Code = "U05" }) == null,
+                  "no warning for adding your own mod to a personal seat");
+            Check(SkinImport.FreeSlot(game, "SKR") == 84 && ModFile.FreeStageCode(game) == "U01", "a mod added from a file: Sakura 84 (personal seats first), stage U01");
+
+            Console.WriteLine("Codes kept for good (mods deleted from GameBanana)");
+            CodeHistory.Use("{\"format\":1,\"codes\":[{\"code\":\"BLK 23\",\"mod\":999,\"name\":\"Old\",\"author\":\"a\",\"added\":100}," +
+                            "{\"code\":\"stage XYZ\",\"mod\":998,\"name\":\"Old stage\",\"author\":\"b\",\"added\":100}]}");
+            var newer = new GameBanana.Mod { Id = 1000, Added = 200, Name = "New", Category = "Skins",
+                Files = new List<GameBanana.ModFile> { new GameBanana.ModFile { Clean = true, Contents = new List<string> { "BLK_23.obj.emo", "STG_XYZ.emz" } } } };
+            var holders = SharedCodes.Holders(new[] { newer });
+            Check(SharedCodes.HeldBy["BLK 23"].Id == 999 && SharedCodes.HeldBy["BLK 23"].Name.Contains("deleted from GameBanana") && SharedCodes.HeldBy["stage XYZ"].Id == 998,
+                  "a deleted mod's codes stay taken (BLK 23, stage XYZ)");
+            Check(SharedCodes.Slot(newer, "BLK", 23, holders) == 0 && SharedCodes.StageCode(newer, "XYZ") == null, "a newer upload in them doesn't get them");
+            Check(Seats.Costume("BLK", 23).Kind == Seats.Kind.Held && Seats.Costume("BLK", 23).Text.Contains("deleted"), "Free codes: taken, by a deleted mod");
+            var listedAgain = new GameBanana.Mod { Id = 999, Added = 100, Name = "Old", Category = "Skins",
+                Files = new List<GameBanana.ModFile> { new GameBanana.ModFile { Clean = true, Contents = new List<string> { "BLK_23.obj.emo" } } } };
+            SharedCodes.Holders(new[] { listedAgain, newer });
+            Check(SharedCodes.HeldBy["BLK 23"].Id == 999 && !SharedCodes.HeldBy["BLK 23"].Name.Contains("deleted"), "a mod still listed holds its code as itself");
 
             Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");
             Environment.Exit(failures == 0 ? 0 : 1);

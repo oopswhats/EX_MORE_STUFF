@@ -191,19 +191,22 @@ namespace ExMoreStuff
             }
             var result = ModFile.Install(fake, modZip, null, null, "", null, null, text => { });
             Check(result.Problems.Count == 0, "no problems" + (result.Problems.Count > 0 ? ": " + string.Join("; ", result.Problems) : ""));
-            Check(result.Into.SequenceEqual(new[] { "Blanka 84", "stage C80" }), "in: " + string.Join(", ", result.Into));
+            Check(result.Into.SequenceEqual(new[] { "Blanka 84", "stage U01" }), "in: " + string.Join(", ", result.Into));
             string stageDir = Path.Combine(fake, "patch_ae2_tu3", "battle", "stage");
-            byte[] built = File.Exists(Path.Combine(stageDir, "STG_C80.emz")) ? File.ReadAllBytes(Path.Combine(stageDir, "STG_C80.emz")) : null;
-            Check(built != null && File.Exists(Path.Combine(stageDir, "STG_C80.tex.emz")), "STG_C80.emz and its textures (from the game)");
+            byte[] built = File.Exists(Path.Combine(stageDir, "STG_U01.emz")) ? File.ReadAllBytes(Path.Combine(stageDir, "STG_U01.emz")) : null;
+            Check(built != null && File.Exists(Path.Combine(stageDir, "STG_U01.tex.emz")), "STG_U01.emz (a personal code) and its textures (from the game)");
             Check(built != null && GameArt.ReadContainer(GameArt.Unpack(built)).All(e => !e.Key.StartsWith("TRN_", StringComparison.OrdinalIgnoreCase)), "re-coded inside: nothing named TRN_ left");
-            Check(Same(File.ReadAllBytes(Path.Combine(fake, "patch_ae2_tu3", "battle", "sound", "bgm", "BGM_C80.csb")), new byte[] { 1, 2, 3 }), "its music as BGM_C80.csb");
-            Check(File.Exists(Path.Combine(fake, "patch_ae2_tu3", "battle", "chara", "BLK", "BLK_84.obj.emo")), "the skin as Blanka 84 (a free seat from 84 down)");
+            Check(Same(File.ReadAllBytes(Path.Combine(fake, "patch_ae2_tu3", "battle", "sound", "bgm", "BGM_U01.csb")), new byte[] { 1, 2, 3 }), "its music as BGM_U01.csb");
+            Check(File.Exists(Path.Combine(fake, "patch_ae2_tu3", "battle", "chara", "BLK", "BLK_84.obj.emo")), "the skin as Blanka 84 (a personal seat, 84 down)");
             var records = Installer.Load(fake);
             Check(records.Count == 2 && records.All(r => r.Source == "file" && File.Exists(r.Package)), "two of your own packages, each with its zip");
             Check(records.Any(r => r.Item.IsStage && r.Shown == "my stage mod"), "named after the file");
             Check(!Directory.EnumerateFiles(fake, "*.exe", SearchOption.AllDirectories).Any(f => !f.EndsWith("SSFIV.exe")), "the .exe inside never came out");
             result = ModFile.Install(fake, modZip, null, null, "", null, null, text => { });
-            Check(result.Into.SequenceEqual(new[] { "Blanka 84", "stage C80" }) && Installer.Load(fake).Count == 2, "installing it again updates the same slot and code");
+            Check(result.Into.SequenceEqual(new[] { "Blanka 84", "stage U01" }) && Installer.Load(fake).Count == 2, "installing it again updates the same slot and code");
+            string copy = Path.Combine(scratch, "same mod renamed.zip");
+            File.Copy(modZip, copy);
+            Check(Installer.AddedBefore(fake, modZip) != null && Installer.AddedBefore(fake, copy) != null, "Add Mod From File sees it was added before, under any name");
 
             Directory.Delete(scratch, true);
             Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");

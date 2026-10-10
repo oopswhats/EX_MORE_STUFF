@@ -18,6 +18,16 @@ static class HitchTest
         Application.SetCompatibleTextRenderingDefault(false);
         var clock = Stopwatch.StartNew();
         Assembly program = Assembly.LoadFrom(args[0]);
+        // the program's own folder (Mods\, settings.json) is the exe's, not this test's; and only a made-up game (an empty
+        // SSFIV.exe): on a real one the window would take the player's packages into this Mods\ when it opens
+        program.GetType("ExMoreStuff.AppFolders").GetProperty("Root").SetValue(null, System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(args[0])));
+        string game = (string)program.GetType("ExMoreStuff.Settings").GetProperty("GameFolder").GetValue(null);
+        string exe = game == null ? null : System.IO.Path.Combine(game, "SSFIV.exe");
+        if (exe == null || !System.IO.File.Exists(exe) || new System.IO.FileInfo(exe).Length > 0)
+        {
+            Console.Error.WriteLine("settings.json beside the exe must point at a made-up game folder (an empty SSFIV.exe), not " + (game ?? "nothing"));
+            Environment.Exit(2);
+        }
         var form = (Form)Activator.CreateInstance(program.GetType("ExMoreStuff.MainForm"), true);
         Console.WriteLine("window made: " + clock.ElapsedMilliseconds + " ms");
         var stalls = new List<string>();

@@ -25,6 +25,9 @@ namespace ExMoreStuff
         // Game stages replaced on this PC (stage code -> the code of what it plays as): as applied, and as chosen.
         Dictionary<string, string> replaced = new Dictionary<string, string>();
         readonly Dictionary<string, string> wantedReplaced = new Dictionary<string, string>();
+        // Game costumes played as another on this PC ("RYU:2" -> the costume it plays as): as applied, and as chosen.
+        Dictionary<string, int> swapped = new Dictionary<string, int>();
+        readonly Dictionary<string, int> wantedSwaps = new Dictionary<string, int>();
         readonly Dictionary<string, Image> pictures = new Dictionary<string, Image>();
         readonly Dictionary<string, Image> stagePictures = new Dictionary<string, Image>();
         readonly Dictionary<string, Image> portraits = new Dictionary<string, Image>();
@@ -51,6 +54,8 @@ namespace ExMoreStuff
         readonly PackagesPanel packagesPage = new PackagesPanel { Dock = DockStyle.Fill };
         readonly Clear storageView = new Clear { Dock = DockStyle.Fill, Visible = false };
         readonly StoragePanel storagePage = new StoragePanel { Dock = DockStyle.Fill };
+        readonly Clear oldModsView = new Clear { Dock = DockStyle.Fill, Visible = false };
+        readonly OldModsPanel oldModsPage = new OldModsPanel { Dock = DockStyle.Fill };
         readonly Clear freeCodesView = new Clear { Dock = DockStyle.Fill, Visible = false };
         readonly FreeCodesPanel freeCodesPage = new FreeCodesPanel { Dock = DockStyle.Fill };
         string openTool;   // the Advanced tool open: null (its cards), "music", "packages" or "storage"
@@ -63,6 +68,7 @@ namespace ExMoreStuff
         readonly ToolTip tips = new ToolTip();
         readonly FlatButton apply = new FlatButton("Apply changes", true) { Enabled = false };
         readonly FlatButton disableAll = new FlatButton("Disable everything");
+        readonly FlatButton refresh = new FlatButton("Refresh");
 
         // A thin orange line along the top of the footer while downloading.
         class ProgressLine : Clear
@@ -113,12 +119,16 @@ namespace ExMoreStuff
             // Footer: status, the game folder, buttons.
             footer.Dock = DockStyle.Bottom;
             progress.Bounds = new Rectangle(0, 0, ClientSize.Width, 3);
-            apply.Location = new Point(ClientSize.Width - apply.Width - 18, 17);
-            disableAll.Location = new Point(apply.Left - disableAll.Width - 10, 17);
-            status.Bounds = new Rectangle(18, 14, disableAll.Left - 36, 20);
-            gameLabel.Bounds = new Rectangle(18, 36, disableAll.Left - 100, 18);
+            // the buttons a little smaller than elsewhere (same text size), so three fit beside the status
+            foreach (FlatButton b in new[] { refresh, disableAll, apply }) b.Size = new Size(TextRenderer.MeasureText(b.Text, b.Font).Width + 24, 32);
+            apply.Location = new Point(ClientSize.Width - apply.Width - 18, 19);
+            disableAll.Location = new Point(apply.Left - disableAll.Width - 8, 19);
+            refresh.Location = new Point(disableAll.Left - refresh.Width - 8, 19);
+            status.Bounds = new Rectangle(18, 14, refresh.Left - 36, 20);
+            gameLabel.Bounds = new Rectangle(18, 36, refresh.Left - 100, 18);
             change.LinkClicked += (s, e) => ChooseGame();
-            footer.Controls.AddRange(new Control[] { progress, status, gameLabel, change, disableAll, apply });
+            footer.Controls.AddRange(new Control[] { progress, status, gameLabel, change, refresh, disableAll, apply });
+            refresh.Click += async (s, e) => await RefreshAll();
             disableAll.Click += (s, e) => DisableEverything();
             apply.Click += async (s, e) => await Apply();
 
@@ -134,7 +144,8 @@ namespace ExMoreStuff
             rosterPage.Resize += (s, e) => LayOutRoster();
 
             // The Advanced tools (from the page's cards), each with the way back to it.
-            foreach (var view in new[] { Tuple.Create(musicView, (Control)musicPage), Tuple.Create(packagesView, (Control)packagesPage), Tuple.Create(storageView, (Control)storagePage), Tuple.Create(freeCodesView, (Control)freeCodesPage) })
+            foreach (var view in new[] { Tuple.Create(musicView, (Control)musicPage), Tuple.Create(packagesView, (Control)packagesPage), Tuple.Create(storageView, (Control)storagePage), Tuple.Create(freeCodesView, (Control)freeCodesPage),
+                                       Tuple.Create(oldModsView, (Control)oldModsPage) })
             {
                 var toAdvanced = new FlatButton("< Advanced") { Location = new Point(6, 2) };
                 backButtons.Add(toAdvanced);
@@ -154,13 +165,15 @@ namespace ExMoreStuff
             communityPage.Working += PageWorking;
             packagesPage.Working += PageWorking;
             musicPage.Working += PageWorking;
+            oldModsPage.Working += PageWorking;
+            oldModsPage.Changed += () => ReloadKeeping(null);   // old mods brought in: the rest waiting for Apply stays
             unlock.Tick += (s, e) => { unlock.Stop(); Lock(false); };
 
             var credits = new AboutCard(Theme.Resource("logo.png"), wordmark, typeof(MainForm).Assembly.GetName().Version.ToString());
             aboutPage.Controls.Add(credits);
             aboutPage.Resize += (s, e) => credits.Location = new Point((aboutPage.Width - credits.Width) / 2, 8);
 
-            content.Controls.AddRange(new Control[] { rosterPage, costumePage, stagesPage, communityPage, advancedPage, musicView, packagesView, storageView, freeCodesView, aboutPage });
+            content.Controls.AddRange(new Control[] { rosterPage, costumePage, stagesPage, communityPage, advancedPage, musicView, packagesView, storageView, freeCodesView, oldModsView, aboutPage });
             Controls.Add(content);
             Controls.Add(footer);
             Controls.Add(header);
@@ -202,6 +215,7 @@ namespace ExMoreStuff
             Settings.GameFolder = game;
             ShowGame();
             await AdoptPackages();
+            await ForgetMissingPackages();
             Reload();   // what's installed, right away: the catalog's items join when it comes
             SetStatus("Loading the catalog...");
             try { catalog = await Catalog.Load(Program.CatalogSource()); catalogProblem = null; }
@@ -211,13 +225,63 @@ namespace ExMoreStuff
             communityPage.CheckForUpdates();   // GameBanana's list, read in the background: updates for installed mods
         }
 
-        // packages' zips from before the Mods folder come into it (once; it may take a moment for big zips)
+        // packages' zips into their places in the Mods folder: from before it (once; it may take a moment for big zips),
+        // and sorted into Stages\ and Characters\<fighter>\
         async Task AdoptPackages()
         {
             if (!Game.IsGameFolder(game)) return;
             string g = game;
-            try { await Task.Run(() => Installer.AdoptPackages(g, AppFolders.Mods)); }
-            catch (Exception ex) { MessageBox.Show(this, "Some packages couldn't be copied into " + AppFolders.Mods + ": " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            try { await Task.Run(() => Installer.AdoptPackages(g)); }
+            catch (Exception ex) { MessageBox.Show(this, "Some packages couldn't be put in " + AppFolders.Mods + ": " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+
+        // Refresh: the game folder and the Mods folder looked at again, as when the program starts (zips sorted into Mods\,
+        // zips deleted by hand, what's installed, old mods, disk space); changes waiting for Apply stay.
+        async Task RefreshAll()
+        {
+            if (locked || !Game.IsGameFolder(game)) return;
+            Lock(true);
+            try
+            {
+                await AdoptPackages();
+                await ForgetMissingPackages();
+            }
+            finally { Lock(false); }
+            ReloadKeeping(null);
+            UpdateStatus("Refreshed");
+        }
+
+        // Packages whose zip the player deleted from the Mods folder: are they to come out of the game too (as with each
+        // card's trash can)? "No" is remembered, so they aren't asked about again.
+        async Task ForgetMissingPackages()
+        {
+            if (!Game.IsGameFolder(game) || Game.IsRunning()) return;   // asked next time instead
+            var kept = Settings.KeptWithoutZip;
+            var gone = Installer.MissingPackages(game).Where(r => !kept.Contains(r.Item.Key)).ToList();
+            if (gone.Count == 0) return;
+            bool one = gone.Count == 1;
+            string names = string.Join("\n", gone.Take(10).Select(r => "    " + (r.Item.IsStage ? "" : Fighters.Name(r.Item.Fighter) + " ") + r.Item.TitleNamed(r.Shown ?? r.Item.Name))) +
+                           (gone.Count > 10 ? "\n    and " + (gone.Count - 10) + " more" : "");
+            var answer = MessageBox.Show(this, (one ? "This package's zip is" : "These " + gone.Count + " packages' zips are") + " gone from your Mods folder:\n\n" + names +
+                    "\n\nDelete " + (one ? "it" : "them") + " from EX More Stuff too? " + (one ? "Its" : "Their") + " files come out of the game, as with the trash can on " + (one ? "its card" : "their cards") + "." +
+                    "\n\nNo: " + (one ? "it stays" : "they stay") + " in the game, and you won't be asked about " + (one ? "it" : "them") + " again.",
+                    Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer == DialogResult.No)
+            {
+                Settings.KeptWithoutZip = kept.Concat(gone.Select(r => r.Item.Key)).Distinct().ToList();
+                return;
+            }
+            string g = game;
+            var problems = new List<string>();
+            SetStatus("Deleting " + gone.Count + " package" + (one ? "" : "s") + "...");
+            await Task.Run(() =>
+            {
+                foreach (Installed r in gone)
+                    try { PackagesPanel.PurgeForGood(g, r); }
+                    catch (Exception ex) { lock (problems) problems.Add(r.Item.TitleNamed(r.Shown ?? r.Item.Name) + ": " + ex.Message); }
+            });
+            if (problems.Count > 0)
+                MessageBox.Show(this, "Some couldn't be deleted:\n\n" + string.Join("\n", problems), Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -295,6 +359,7 @@ namespace ExMoreStuff
             packagesView.Visible = tab == advancedTab && openTool == "packages";
             storageView.Visible = tab == advancedTab && openTool == "storage";
             freeCodesView.Visible = tab == advancedTab && openTool == "freecodes";
+            oldModsView.Visible = tab == advancedTab && openTool == "oldmods";
             if (!musicView.Visible) musicPage.StopPlaying();
             stagesPage.Visible = tab == stagesTab;
             communityPage.Visible = tab == communityTab;
@@ -324,7 +389,59 @@ namespace ExMoreStuff
 
         bool Changed(Item item) { return Wanted(item) != IsInstalled(item.Key) || (Wanted(item) && HasUpdate(item)); }
 
-        int Pending() { return AllItems().Count(Changed) + ReplacementChanges().Count + Renames().Count; }
+        int Pending() { return AllItems().Count(Changed) + ReplacementChanges().Count + SwapChanges().Count + Renames().Count; }
+
+        int Swap(Dictionary<string, int> map, string key) { int s; return map.TryGetValue(key, out s) ? s : 0; }
+
+        // The game costumes whose replacement was changed and not applied yet.
+        List<string> SwapChanges() { return swapped.Keys.Union(wantedSwaps.Keys).Where(k => Swap(swapped, k) != Swap(wantedSwaps, k)).ToList(); }
+
+        // A costume's name: the game's (Original, Alternate 1 ...), or a custom one's as on its card.
+        string CostumeLabel(string fighter, int costume)
+        {
+            if (costume < Catalog.FirstCustomCostume) return CostumeGrid.CostumeName(costume);
+            Item item = AllItems().FirstOrDefault(i => i.IsCostume && i.Fighter == fighter && i.Slot == costume);
+            Installed record = item == null ? null : installed.FirstOrDefault(r => r.Item.Key == item.Key);
+            return item == null ? "Slot " + costume : CardTitle(item, record);
+        }
+
+        Image CostumePicture(string fighter, int costume)
+        {
+            Image image;
+            if (costume >= Catalog.FirstCustomCostume && pictures.TryGetValue("costume:" + fighter + ":" + costume, out image) && image != null) return image;
+            return portraits.TryGetValue(fighter, out image) ? image : null;
+        }
+
+        // Clicking a game costume: choose what plays in its place on this PC (applied with the rest): the Original or a
+        // costume the player installed, never one of the game's alternates or DLC costumes (CostumeSwaps.MayStandIn).
+        void ChooseCostume(string fighter, int costume)
+        {
+            var sources = new List<string>();
+            if (costume != 1) sources.Add(CostumeSwaps.Key(fighter, 1));
+            sources.AddRange(AllItems().Where(i => i.IsCostume && i.Fighter == fighter && IsInstalled(i.Key)).OrderBy(i => i.Slot).Select(i => CostumeSwaps.Key(fighter, i.Slot)));
+            if (sources.Count == 0)
+            {
+                MessageBox.Show(this, "Only a costume you installed can play as " + Fighters.Name(fighter) + "'s Original: install one of " + Fighters.Name(fighter) + "'s first.",
+                    Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            string folder = game, target = CostumeSwaps.Key(fighter, costume), name = CostumeLabel(fighter, costume);
+            Func<string, int> number = k => int.Parse(k.Substring(k.IndexOf(':') + 1));
+            int current = Swap(wantedSwaps, target);
+            using (var dialog = new ReplaceDialog(target, current == 0 ? null : CostumeSwaps.Key(fighter, current), sources,
+                       k => CostumeLabel(fighter, number(k)), k => CostumePicture(fighter, number(k)),
+                       (t, source) => source == null ? null : CostumeSwaps.Problem(folder, fighter, costume, number(source)),
+                       "Pick what you'd like to see whenever " + Fighters.Name(fighter) + "'s " + name + " is picked: the Original costume or one you installed " +
+                       "(the game's alternates and DLC costumes can't stand in for another). EX More Stuff puts a copy in its place; the game's own files are kept " +
+                       "and come back when you choose it as it is again.\n\nOnly you see it, online too: your opponent sees their own " + name + ".", "As it is"))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                if (dialog.Choice == null) wantedSwaps.Remove(target);
+                else wantedSwaps[target] = number(dialog.Choice);
+            }
+            ShowCostumes(fighter);
+            UpdateStatus();
+        }
 
         // Renames of items that stay installed.
         List<KeyValuePair<string, string>> Renames()
@@ -382,12 +499,14 @@ namespace ExMoreStuff
             UpdateStatus();
         }
 
-        // A fighter's tile bubbles: their costumes switched off (grey) and on (green), as currently chosen.
+        // A fighter's tile bubbles, as currently chosen: switched off (grey), on from GameBanana (green), on and added by the player (blue).
         void Count(FighterTile tile, string code)
         {
             var costumes = AllItems().Where(i => !i.IsStage && i.Fighter == code).ToList();
-            tile.Active = costumes.Count(Wanted);
-            tile.Inactive = costumes.Count - tile.Active;
+            var on = costumes.Where(Wanted).ToList();
+            tile.Active = on.Count(i => (i.Id ?? "").StartsWith("gamebanana:"));   // green: from GameBanana
+            tile.Own = on.Count - tile.Active;                                       // blue: added by the player
+            tile.Inactive = costumes.Count - on.Count;                               // grey: switched off
             tile.Invalidate();
         }
 
@@ -397,12 +516,21 @@ namespace ExMoreStuff
             var keepWanted = wanted.Where(w => w.Key != gone).ToList();
             var keepNames = wantedNames.Where(w => w.Key != gone).ToList();
             var keepReplaced = wantedReplaced.ToList();
+            var keepSwaps = wantedSwaps.ToList();
             Reload();
             foreach (var w in keepWanted) wanted[w.Key] = w.Value;
             foreach (var n in keepNames) wantedNames[n.Key] = n.Value;
             // a replacement waiting for Apply whose stage is gone (deleted) is dropped
             var stagesLeft = new HashSet<string>(Stages.Codes.Concat(installed.Concat(removed).Where(r => r.Item.IsStage).Select(r => r.Item.Code)));
             foreach (var r in keepReplaced) if (stagesLeft.Contains(r.Value)) wantedReplaced[r.Key] = r.Value;
+            // costume replacements as chosen, but not by a costume that's gone
+            wantedSwaps.Clear();
+            foreach (var s in keepSwaps)
+            {
+                string f; int c;
+                if (CostumeSwaps.ParseKey(s.Key, out f, out c) && (s.Value == 1 || installed.Concat(removed).Any(r => r.Item.IsCostume && r.Item.Fighter == f && r.Item.Slot == s.Value)))
+                    wantedSwaps[s.Key] = s.Value;
+            }
             BuildRoster();
             if (openFighter != null) ShowCostumes(openFighter);
             BuildStages();
@@ -418,12 +546,16 @@ namespace ExMoreStuff
             replaced = Game.IsGameFolder(game) ? Replacements.Load(game).ToDictionary(r => r.Stage, r => r.Source) : new Dictionary<string, string>();
             wantedReplaced.Clear();
             foreach (var r in replaced) wantedReplaced[r.Key] = r.Value;
+            swapped = Game.IsGameFolder(game) ? CostumeSwaps.Load(game).ToDictionary(s => s.Key, s => s.Source) : new Dictionary<string, int>();
+            wantedSwaps.Clear();
+            foreach (var s in swapped) wantedSwaps[s.Key] = s.Value;
             BuildRoster();
             if (openFighter != null) ShowCostumes(openFighter);
             BuildStages();
             packagesPage.SetGame(game);
             communityPage.SetGame(game);
             storagePage.SetGame(game);
+            oldModsPage.SetGame(game);
             UpdateStatus();
         }
 
@@ -493,6 +625,21 @@ namespace ExMoreStuff
             var cards = AllItems().Where(i => !i.IsStage && i.Fighter == code).OrderBy(i => i.Slot).ThenBy(i => i.Color).Select(Card).ToList();
             int width = ClientSize.Width - content.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth - 16;
             if (cards.Count == 0) cards.Add(ShadowLabel.Note("No custom costumes for " + Fighters.Name(code) + " yet.", width));
+            // the game's costumes, to have one play as the Original or one of the player's (only on this PC)
+            var gameCostumes = Game.IsGameFolder(game) ? CostumeSwaps.GameCostumes(game, code) : new List<int>();
+            if (gameCostumes.Count > 0)
+            {
+                cards.Add(new Heading("The game's costumes", width));
+                cards.Add(ShadowLabel.Note("Click one to have it play as the Original costume or one you installed. Only you see it, online too. " +
+                                           "The game's alternates and DLC costumes can't stand in for another.", width));
+                Image portrait;
+                portraits.TryGetValue(code, out portrait);
+                var grid = new CostumeGrid(width) { Costumes = gameCostumes, Portrait = portrait };
+                grid.PlaysAs = n => { int s = Swap(wantedSwaps, CostumeSwaps.Key(code, n)); return s == 0 ? null : CostumeLabel(code, s); };
+                grid.Clicked += n => ChooseCostume(code, n);
+                grid.Lay();
+                cards.Add(grid);
+            }
             Fill(costumeCards, cards);
             rosterPage.Visible = false;
             costumePage.Visible = costumesTab.Selected;
@@ -554,7 +701,14 @@ namespace ExMoreStuff
                 Margin = new Padding(6),
             };
             fromFile.Click += async (s, e) => await AddFromFile();
-            Fill(advancedPage, new List<Control> { new Heading("Advanced", width), note, fromFile, music, codes, space, codesFree });
+            var oldMods = new ToolCard
+            {
+                Symbol = "⤓", Title = "Old mods",
+                Detail = "Mods put in the game's folders by hand: see them, and bring their stages and costumes into EX More Stuff.",
+                Margin = new Padding(6),
+            };
+            oldMods.Click += (s, e) => { openTool = "oldmods"; oldModsPage.SetGame(game); ShowTab(advancedTab); };
+            Fill(advancedPage, new List<Control> { new Heading("Advanced", width), note, fromFile, oldMods, music, codes, space, codesFree });
         }
 
         // Cards flow left to right; a heading, a note or the stage grid has a line to itself.
@@ -757,7 +911,7 @@ namespace ExMoreStuff
             locked = on;
             costumesTab.Enabled = stagesTab.Enabled = communityTab.Enabled = advancedTab.Enabled = aboutTab.Enabled = change.Enabled = !on;
             foreach (FlatButton back in backButtons) back.Enabled = !on;
-            disableAll.Enabled = !on;
+            disableAll.Enabled = refresh.Enabled = !on;
             apply.Enabled = !on && Pending() > 0;
             UseWaitCursor = on;
             if (!on) UpdateStatus();
@@ -852,6 +1006,32 @@ namespace ExMoreStuff
                 }
                 catch (Exception ex) { problems.Add(StageName(stage) + ": " + ex.Message); }
             }
+            // Replaced game costumes the same way: changed ones put back, then the new ones made (after the installs above,
+            // so a costume just installed can stand in)
+            var swapChanges = SwapChanges();
+            foreach (string key in swapChanges.Where(k => Swap(swapped, k) != 0))
+            {
+                string f; int c;
+                if (!CostumeSwaps.ParseKey(key, out f, out c)) continue;
+                string what = Fighters.Name(f) + "'s " + CostumeGrid.CostumeName(c);
+                SetStatus("Putting back " + what + "...");
+                try
+                {
+                    string note = await Task.Run(() => CostumeSwaps.Restore(folder, f, c));
+                    if (note != null) problems.Add(what + ": " + note);
+                }
+                catch (Exception ex) { problems.Add(what + ": " + ex.Message); }
+            }
+            foreach (string key in swapChanges.Where(k => Swap(wantedSwaps, k) != 0))
+            {
+                string f; int c;
+                if (!CostumeSwaps.ParseKey(key, out f, out c)) continue;
+                int source = wantedSwaps[key];
+                string what = Fighters.Name(f) + "'s " + CostumeGrid.CostumeName(c);
+                SetStatus("Replacing " + what + " with " + CostumeLabel(f, source) + "...");
+                try { await Task.Run(() => CostumeSwaps.Replace(folder, f, c, source)); }
+                catch (Exception ex) { problems.Add(what + ": " + ex.Message); }
+            }
             foreach (var rename in Renames())
             {
                 try { Installer.Rename(folder, rename.Key, rename.Value); }
@@ -890,50 +1070,70 @@ namespace ExMoreStuff
         async Task AddFromFile()
         {
             if (!GameClosed()) return;
-            string path;
-            using (var dialog = new OpenFileDialog { Filter = "Mod files (*.zip; *.rar; *.7z)|*.zip;*.rar;*.7z", Title = "Add a mod from a file" })
+            string[] paths;
+            using (var dialog = new OpenFileDialog { Filter = "Mod files (*.zip; *.rar; *.7z)|*.zip;*.rar;*.7z", Title = "Add mods from files (pick one or more)", Multiselect = true })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                path = dialog.FileName;
+                paths = dialog.FileNames;
             }
-            Item item = Installer.Package(path);
-            if (item == null)
+            var added = new List<string>();
+            var already = new List<string>();
+            var notAdded = new List<string>();
+            foreach (string path in paths)
             {
-                ShowTab(communityTab);
-                await communityPage.InstallFile(path);
-                return;
+                string file = Path.GetFileName(path);
+                // the same file added before (a duplicate, perhaps under another name): left as it is
+                string g = game;
+                string twin = await Task.Run(() => Installer.AddedBefore(g, path));
+                if (twin != null) { already.Add(file + "  (" + twin + ")"); continue; }
+                Item item = Installer.Package(path);
+                if (item == null)
+                {
+                    ShowTab(communityTab);
+                    string problem = await communityPage.InstallFile(path);
+                    if (problem == null) added.Add(file); else notAdded.Add(file + ": " + problem);
+                    continue;
+                }
+                try
+                {
+                    // Any slot or code: it only stops at files of that slot EX More Stuff didn't put there (InstallPackage).
+                    string warning = Seats.Warning(item);   // the game's, taken on GameBanana, or not free: the player's call
+                    if (warning != null && MessageBox.Show(this, file + ": " + warning + ". Add it anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) { notAdded.Add(file + ": skipped"); continue; }
+                    // a new color of a custom costume shows once that costume is in the game
+                    string costume = item.Fighter + "_" + item.Slot.ToString("D2");
+                    if (item.IsColor && item.Slot >= Catalog.FirstCustomCostume && !File.Exists(Path.Combine(Game.FolderFor(game, item), costume + ".obj.emo")) &&
+                        MessageBox.Show(this, file + ": " + Fighters.Name(item.Fighter) + " " + item.Slot.ToString("D2") + " isn't in the game, so this color won't show until it is. Add it anyway?",
+                            Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) { notAdded.Add(file + ": skipped"); continue; }
+                    if (installed.Concat(removed).Any(r => r.Item.Key == item.Key) && MessageBox.Show(this, file + ": " + Describe(item) + " is already installed. Replace it with this one?", Text,
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) { notAdded.Add(file + ": skipped"); continue; }
+                    Installer.InstallPackage(game, item, AppFolders.KeepPackage(path, item), "file");   // a copy in Mods\, so the player's file may move
+                    Installer.AdoptPackages(game);   // one picked from inside Mods\ goes to its folder there
+                    Reload();
+                    added.Add(file);
+                }
+                catch (Exception ex) { notAdded.Add(file + ": " + ex.Message); }
             }
-            try
+            Reload();
+            string round = added.Count > 0 ? RoundMusicMod() : null;
+            if (paths.Length > 1 || already.Count > 0 || notAdded.Count > 0 || round != null)
             {
-                // Any slot or code: it only stops at files of that slot EX More Stuff didn't put there (InstallPackage).
-                string warning = Seats.Warning(item);   // the game's, taken on GameBanana, or not free: the player's call
-                if (warning != null && MessageBox.Show(this, warning + ". Add it anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) return;
-                // a new color of a custom costume shows once that costume is in the game
-                string costume = item.Fighter + "_" + item.Slot.ToString("D2");
-                if (item.IsColor && item.Slot >= Catalog.FirstCustomCostume && !File.Exists(Path.Combine(Game.FolderFor(game, item), costume + ".obj.emo")) &&
-                    MessageBox.Show(this, Fighters.Name(item.Fighter) + " " + item.Slot.ToString("D2") + " isn't in the game, so this color won't show until it is. Add it anyway?",
-                        Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) return;
-                if (IsInstalled(item.Key) && MessageBox.Show(this, Describe(item) + " is already installed. Replace it?", Text,
-                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) return;
-                Installer.InstallPackage(game, item, AppFolders.KeepPackage(path), "file");   // a copy in Mods\, so the player's file may move
-                string round = RoundMusicMod();
-                if (round != null) MessageBox.Show(this, "Added, but " + round + ".", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-                Reload();
-                UpdateStatus("Added");
+                string report = (added.Count > 0 ? "Added (" + added.Count + "):\n    " + string.Join("\n    ", added) : "Nothing added.") +
+                                (already.Count > 0 ? "\n\nAlready added before, left as they are (" + already.Count + "):\n    " + string.Join("\n    ", already) : "") +
+                                (notAdded.Count > 0 ? "\n\nNot added (" + notAdded.Count + "):\n    " + string.Join("\n    ", notAdded) : "") +
+                                (round != null ? "\n\nNote: " + round + "." : "");
+                MessageBox.Show(this, report, Text, MessageBoxButtons.OK, notAdded.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, "That package wasn't added: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
+            if (added.Count > 0) UpdateStatus("Added " + added.Count);
         }
 
         // Everything off at once; it all stays listed (catalog items, and the player's own packages from their zips).
         void DisableEverything()
         {
-            if ((installed.Count == 0 && replaced.Count == 0) || !GameClosed()) return;
+            if ((installed.Count == 0 && replaced.Count == 0 && swapped.Count == 0) || !GameClosed()) return;
             string what = (installed.Count > 0 ? "Switch off all " + installed.Count + " costumes and stages EX More Stuff installed" : "") +
                           (installed.Count > 0 && replaced.Count > 0 ? " and put back " : replaced.Count > 0 ? "Put back " : "") +
                           (replaced.Count > 0 ? "the " + replaced.Count + " game stage" + (replaced.Count > 1 ? "s" : "") + " it replaced" : "");
+            if (swapped.Count > 0) what += (what.Length > 0 ? " and put back " : "Put back ") + "the " + swapped.Count + " game costume" + (swapped.Count > 1 ? "s" : "") + " it replaced";
             if (MessageBox.Show(this, what + "? Their files leave the game, but they stay listed, so you can switch them back on. The game's own files are not touched.",
                     Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) return;
             var problems = new List<string>();
@@ -950,6 +1150,17 @@ namespace ExMoreStuff
                     if (note != null) problems.Add(StageName(stage) + ": " + note);
                 }
                 catch (Exception ex) { problems.Add(StageName(stage) + ": " + ex.Message); }
+            }
+            foreach (string key in swapped.Keys.ToList())
+            {
+                string f; int c;
+                if (!CostumeSwaps.ParseKey(key, out f, out c)) continue;
+                try
+                {
+                    string note = CostumeSwaps.Restore(game, f, c);
+                    if (note != null) problems.Add(Fighters.Name(f) + "'s " + CostumeGrid.CostumeName(c) + ": " + note);
+                }
+                catch (Exception ex) { problems.Add(Fighters.Name(f) + "'s " + CostumeGrid.CostumeName(c) + ": " + ex.Message); }
             }
             string round = RoundMusicMod();
             if (round != null) problems.Add(round);

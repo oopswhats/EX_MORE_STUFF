@@ -7,7 +7,7 @@ namespace ExMoreStuff
     // warning: using the code anyway is the player's call.
     static class Seats
     {
-        public enum Kind { Free, Game, Held, NotFree, Invalid }
+        public enum Kind { Free, Game, Held, NotFree, Personal, Invalid }
 
         public sealed class Answer
         {
@@ -28,6 +28,7 @@ namespace ExMoreStuff
             GameBanana.Mod mod;
             if (SharedCodes.HeldBy.TryGetValue(SharedCodes.Code(fighter, slot), out mod)) return Say(Kind.Held, name + " is taken on GameBanana: " + By(mod), mod);
             if (Catalog.NotFree(false, null, slot)) return Say(Kind.NotFree, name + " isn't free");
+            if (Catalog.PersonalSeat(false, null, slot)) return Say(Kind.Personal, name + " is kept for players' own mods, not for sharing");
             return Say(Kind.Free, name + " is free");
         }
 
@@ -39,6 +40,7 @@ namespace ExMoreStuff
             GameBanana.Mod mod;
             if (SharedCodes.HeldBy.TryGetValue("stage " + code, out mod)) return Say(Kind.Held, "Stage " + code + " is taken on GameBanana: " + By(mod), mod);
             if (Catalog.NotFree(true, code, 0)) return Say(Kind.NotFree, "Stage " + code + " isn't free");
+            if (Catalog.PersonalSeat(true, code, 0)) return Say(Kind.Personal, "Stage " + code + " is kept for players' own mods, not for sharing");
             return Say(Kind.Free, "Stage " + code + " is free");
         }
 
@@ -48,7 +50,7 @@ namespace ExMoreStuff
         {
             if (item.IsColor) return null;   // new colors aren't shared: any free number will do
             Answer answer = item.IsStage ? Stage(item.Code) : Costume(item.Fighter, item.Slot);
-            if (answer.Kind == Kind.Free || answer.Kind == Kind.Invalid) return null;
+            if (answer.Kind == Kind.Free || answer.Kind == Kind.Invalid || answer.Kind == Kind.Personal) return null;   // a personal seat is what your own mods are for
             if (answer.Kind == Kind.Held && (item.Id ?? "").StartsWith("gamebanana:" + answer.Mod.Id + ":")) return null;
             return answer.Text;
         }

@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -19,6 +20,7 @@ namespace ExMoreStuff
         public static readonly Color AccentDown = Color.FromArgb(204, 112, 0);
         public static readonly Color OnAccent = Color.FromArgb(26, 18, 6);
         public static readonly Color Badge = Color.FromArgb(34, 160, 84);
+        public static readonly Color OwnBadge = Color.FromArgb(48, 112, 214);   // the player's own mods (not GameBanana's)
         public static readonly Color GoodText = Color.FromArgb(120, 220, 150);
         public static readonly Color Warning = Color.FromArgb(240, 132, 100);
         public static readonly Color Base = Color.FromArgb(15, 16, 20);
@@ -296,7 +298,7 @@ namespace ExMoreStuff
     class FighterTile : Clear
     {
         public string FighterName;
-        public int Inactive, Active;
+        public int Inactive, Active, Own;   // switched off; on, from GameBanana; on, added by the player
         bool hover;
         Image portrait;
         Bitmap scaled;          // the portrait at the tile's size, made once (not scaled again on every paint)
@@ -397,25 +399,41 @@ namespace ExMoreStuff
             }
             Theme.Draw(g, FighterName, Theme.Bold(8.5f), hover ? Theme.AccentHover : Theme.Text, new Rectangle(2, Height - 28, Width - 4, 22),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            if (Inactive > 0) Bubble(g, Inactive, Theme.Off, false);
-            if (Active > 0) Bubble(g, Active, Theme.Badge, true);
+            DrawBubbles(g);
         }
 
-        // A number in a pill, large and white, with a dark ring keeping it off the portrait.
-        void Bubble(Graphics g, int number, Color fill, bool right)
+        const TextFormatFlags Centred = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding;
+
+        // On the left, grey: switched off. On the right, green: switched on, from GameBanana; and left of it, blue:
+        // switched on, added by the player. Smaller when all three don't fit at full size.
+        void DrawBubbles(Graphics g)
         {
-            string text = number.ToString();
-            Font font = Theme.Bold(10.5f);
-            const TextFormatFlags centred = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding;
-            int w = Math.Max(26, TextRenderer.MeasureText(text, font, Size.Empty, centred).Width + 14);
-            var pill = new RectangleF(right ? Width - w - 5 : 5, 5, w, 26);
-            using (var path = Theme.Rounded(pill, 13))
+            for (int size = 0; size < 3; size++)   // full, smaller, smallest (three two-digit numbers)
+            {
+                Font font = Theme.Bold(new[] { 10.5f, 9f, 7.5f }[size]);
+                int height = new[] { 26, 22, 19 }[size], margin = new[] { 5, 4, 3 }[size], gap = new[] { 4, 2, 1 }[size], padding = new[] { 14, 10, 6 }[size];
+                Func<int, int> width = n => n <= 0 ? 0 : Math.Max(height, TextRenderer.MeasureText(n.ToString(), font, Size.Empty, Centred).Width + padding);
+                int shown = new[] { Inactive, Own, Active }.Count(n => n > 0);
+                if (size < 2 && margin * 2 + width(Inactive) + width(Own) + width(Active) + gap * Math.Max(0, shown - 1) > Width) continue;
+                if (Inactive > 0) Bubble(g, Inactive, Theme.Off, margin, width(Inactive), height, font, false);
+                float right = Width - margin;
+                if (Active > 0) { right -= width(Active); Bubble(g, Active, Theme.Badge, right, width(Active), height, font, true); right -= gap; }
+                if (Own > 0) { right -= width(Own); Bubble(g, Own, Theme.OwnBadge, right, width(Own), height, font, true); }
+                return;
+            }
+        }
+
+        // A number in a pill, white (grey for switched off), with a dark ring keeping it off the portrait.
+        void Bubble(Graphics g, int number, Color fill, float x, int w, int h, Font font, bool on)
+        {
+            var pill = new RectangleF(x, 5, w, h);
+            using (var path = Theme.Rounded(pill, h / 2f))
             {
                 using (var brush = new SolidBrush(fill)) g.FillPath(brush, path);
                 using (var ring = new Pen(Theme.Well, 2f)) g.DrawPath(ring, path);
             }
-            Theme.Draw(g, text, font, right ? Color.White : Color.FromArgb(220, 223, 230),
-                Rectangle.Round(new RectangleF(pill.X, pill.Y - 1, pill.Width, pill.Height)), centred);
+            Theme.Draw(g, number.ToString(), font, on ? Color.White : Color.FromArgb(220, 223, 230),
+                Rectangle.Round(new RectangleF(pill.X, pill.Y - 1, pill.Width, pill.Height)), Centred);
         }
     }
 
@@ -812,6 +830,75 @@ namespace ExMoreStuff
             Theme.Draw(g, "Round 2 and 3 music plays with Tom's Round BGM mod", Theme.Font(9f), Theme.Muted, new Rectangle(143, 138, Width - 160, 18), flags);
             Theme.Draw(g, "GameBanana files are verified safe: virus-scanned by GameBanana, checked on download, and only costume and stage files are used.",
                 Theme.Font(8f), Theme.Muted, new Rectangle(143, 162, Width - 160, 34), flags | TextFormatFlags.WordBreak);
+        }
+    }
+
+    // A short message in the middle of the window that fades in, stays a moment and fades away by itself ("Songs saved
+    // to disk"). Its own little window over the main one, so it can fade; it never takes the focus.
+    class Toast : Form
+    {
+        readonly Timer timer = new Timer { Interval = 15 };
+        int ticks;
+        const int FadeIn = 8, Stay = 100, FadeOut = 20;   // in ticks of 15 ms: about 1.5 s shown
+
+        Toast(string text)
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            BackColor = Color.FromArgb(Theme.Card.R, Theme.Card.G, Theme.Card.B);
+            Font = Theme.Bold(12f);
+            Text = text;
+            Size textSize = TextRenderer.MeasureText("✓  " + text, Font);
+            Size = new Size(textSize.Width + 72, textSize.Height + 30);
+            using (var path = Theme.Rounded(new RectangleF(0, 0, Width, Height), 10)) Region = new Region(path);
+            Opacity = 0;
+            timer.Tick += (s, e) =>
+            {
+                ticks++;
+                Opacity = ticks < FadeIn ? ticks / (double)FadeIn : ticks < FadeIn + Stay ? 1 : Math.Max(0, 1 - (ticks - FadeIn - Stay) / (double)FadeOut);
+                if (ticks >= FadeIn + Stay + FadeOut) { timer.Stop(); Close(); }
+            };
+        }
+
+        protected override bool ShowWithoutActivation { get { return true; } }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams p = base.CreateParams;
+                p.ExStyle |= 0x80 | 0x08000000;   // WS_EX_TOOLWINDOW (not in Alt+Tab), WS_EX_NOACTIVATE
+                return p;
+            }
+        }
+
+        /// <summary>Shows `text` in the middle of the window `over` is in.</summary>
+        public static void Show(Control over, string text)
+        {
+            Form owner = over.FindForm();
+            if (owner == null || !owner.Visible) return;
+            var toast = new Toast(text);
+            toast.Location = new Point(owner.Left + (owner.Width - toast.Width) / 2, owner.Top + (owner.Height - toast.Height) / 2);
+            toast.FormClosed += (s, e) => toast.Dispose();
+            toast.Show(owner);
+            toast.timer.Start();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var path = Theme.Rounded(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), 10))
+            using (var pen = new Pen(Theme.Accent, 1.5f))
+                g.DrawPath(pen, path);
+            Theme.Draw(g, "✓  " + Text, Font, Theme.Text, ClientRectangle, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) timer.Dispose();
+            base.Dispose(disposing);
         }
     }
 }

@@ -20,8 +20,10 @@ namespace ExMoreStuff
         readonly FlatButton use = new FlatButton("Use this stage", true);
         int check;
 
+        // `about` and `self` word it for something else than a stage (a costume): the text at the top, and the label on
+        // the tile that keeps it as it is
         public ReplaceDialog(string stage, string current, IEnumerable<string> sources, Func<string, string> name,
-                             Func<string, Image> picture, Func<string, string, string> problem)
+                             Func<string, Image> picture, Func<string, string, string> problem, string about = null, string self = "Original")
         {
             this.stage = stage;
             this.name = name;
@@ -39,16 +41,16 @@ namespace ExMoreStuff
 
             var preview = new PictureBox { Image = picture(stage), SizeMode = PictureBoxSizeMode.Zoom, BackColor = Theme.Well, Bounds = new Rectangle(24, 24, 240, 135) };
             var title = new Label { Text = "Replace " + name(stage), AutoSize = true, BackColor = Color.Transparent, Font = Theme.Bold(16f), ForeColor = Theme.Text, Location = new Point(284, 20) };
-            var about = new Label
+            var aboutLabel = new Label
             {
-                Text = "Pick what you'd like to see whenever " + name(stage) + " is played. EX More Stuff puts a converted copy in its " +
+                Text = about ?? "Pick what you'd like to see whenever " + name(stage) + " is played. EX More Stuff puts a converted copy in its " +
                        "place; the game's own files are kept and come back when you choose the original again.\n\n" +
                        "Only you see it, online too: your opponent sees their own " + name(stage) + ". Its music stays the same.",
                 AutoSize = false, BackColor = Color.Transparent, Font = Theme.Font(9.5f), ForeColor = Theme.Muted, Bounds = new Rectangle(286, 60, 570, 100),
             };
 
             var list = new ScrollList { Bounds = new Rectangle(14, 178, 852, 396), Padding = new Padding(2) };
-            AddTile(list, null, picture(stage), "Original", name(stage));
+            AddTile(list, null, picture(stage), self, name(stage));
             foreach (string source in sources) AddTile(list, source, picture(source), null, name(source));
 
             status.Bounds = new Rectangle(24, 590, 520, 44);
@@ -57,7 +59,7 @@ namespace ExMoreStuff
             cancel.Location = new Point(use.Left - cancel.Width - 10, 594);
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; };
             use.Click += (s, e) => { if (use.Enabled) DialogResult = DialogResult.OK; };
-            Controls.AddRange(new Control[] { preview, title, about, list, status, cancel, use });
+            Controls.AddRange(new Control[] { preview, title, aboutLabel, list, status, cancel, use });
             CancelButton = null;
             Shown += (s, e) => Pick(Choice);
         }

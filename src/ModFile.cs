@@ -11,7 +11,7 @@ using System.Text.RegularExpressions;
 namespace ExMoreStuff
 {
     // A mod file the player has (Advanced > Add Mod From File), or a GameBanana stage mod: its skins become costumes (SkinImport),
-    // its new colors (30-99) colors of their own, and its stages become stages of their own, each in a personal slot or code (costumes in a free seat from 84 down, stages C80-C99, which
+    // its new colors (30-99) colors of their own, and its stages become stages of their own, each in a personal slot or code (costumes in a personal seat 84-80, then a free one from 79 down; stages U01 up, which
     // only that player sees). A stage mod usually replaces one of the game's (STG_TRN.emz ...): it's re-coded to its new
     // code, the part it doesn't bring (model or textures) comes from the game, and its music goes with it. Only the
     // game's file types are taken out of the archive and nothing in it is run (GameBanana.Unpack).
@@ -22,7 +22,6 @@ namespace ExMoreStuff
         static readonly Regex MusicFile = new Regex(@"^BGM_([A-Za-z0-9]{3})([23])?\.csb$", RegexOptions.IgnoreCase);
         static readonly Regex ColorFile = new Regex(@"^([A-Za-z0-9]{3})_(\d\d)_(\d\d)\.(col\.emb|obj\.emm|png)$", RegexOptions.IgnoreCase);
         static readonly Regex CostumePicture = new Regex(@"^[A-Za-z]{3}_\d\d(_\d\d)?\.png$|^STG_", RegexOptions.IgnoreCase);
-        public const int FirstPersonalStage = 80, LastPersonalStage = 99;
 
         public sealed class Stage
         {
@@ -119,13 +118,20 @@ namespace ExMoreStuff
             return null;
         }
 
-        /// <summary>The first personal stage code C80-C99 nothing uses (no package of EX More Stuff's, no file there), or null.</summary>
+        // players' own stage codes, in the order they're given: U01-U99, 0U0-9U9, 00U-99U
+        static IEnumerable<string> PersonalStageCodes()
+        {
+            for (int n = 1; n <= 99; n++) yield return "U" + n.ToString("D2");
+            for (int n = 0; n <= 99; n++) yield return (n / 10) + "U" + (n % 10);
+            for (int n = 0; n <= 99; n++) yield return n.ToString("D2") + "U";
+        }
+
+        /// <summary>The first personal stage code (U01 up) nothing uses (no package of EX More Stuff's, no file there), or null.</summary>
         public static string FreeStageCode(string game)
         {
             var taken = new HashSet<string>(Installer.Load(game).Concat(Installer.Removed(game)).Where(r => r.Item.IsStage).Select(r => r.Item.Code));
-            for (int n = FirstPersonalStage; n <= LastPersonalStage; n++)
+            foreach (string code in PersonalStageCodes())
             {
-                string code = "C" + n.ToString("D2");
                 if (!taken.Contains(code) && !File.Exists(Path.Combine(Game.PatchFolder(game), "battle", "stage", "STG_" + code + ".emz"))) return code;
             }
             return null;
@@ -230,7 +236,6 @@ namespace ExMoreStuff
                 picture = files.Where(f => Regex.IsMatch(f.Key, @"\.(png|jpe?g)$", RegexOptions.IgnoreCase) && !CostumePicture.IsMatch(NameOf(f.Key))).Select(f => f.Value).FirstOrDefault();
             string clean = Regex.Replace(name, @"[^\w\s\-\.\(\)]", "").Trim();
             if (clean.Length > 60) clean = clean.Substring(0, 60).Trim();
-            string folder = AppFolders.Mods;
             string credit = (!string.IsNullOrEmpty(author) ? " by " + author : "") + where;
             var result = new Result();
             foreach (var costume in costumes)
@@ -239,8 +244,8 @@ namespace ExMoreStuff
                 string itemId = id + ":" + costume.Fighter + costume.Number.ToString("D2");
                 Installed again = records.FirstOrDefault(r => r.Item.Id == itemId);
                 int slot = again != null ? again.Item.Slot : SkinImport.FreeSlot(game, costume.Fighter);
-                if (slot == 0) { result.Problems.Add(Fighters.Name(costume.Fighter) + ": no free slot left in " + Catalog.FirstCustomCostume + "-" + Catalog.LastShared); continue; }
-                string zip = Path.Combine(folder, clean + " - " + costume.Fighter + " " + slot.ToString("D2") + ".zip");
+                if (slot == 0) { result.Problems.Add(Fighters.Name(costume.Fighter) + ": no free slot left in " + Catalog.FirstCustomCostume + "-" + Catalog.LastPersonal); continue; }
+                string zip = Path.Combine(AppFolders.FighterPackages(costume.Fighter), clean + " - " + costume.Fighter + " " + slot.ToString("D2") + ".zip");
                 var item = new Item
                 {
                     Id = itemId, Type = "costume", Fighter = costume.Fighter, Slot = slot, Code = "", Name = name, Author = author ?? "", Version = version,
@@ -284,7 +289,7 @@ namespace ExMoreStuff
                     Description = name + credit + ": a new color", Picture = "", Download = "", Sha256 = "",
                 };
                 string into = Fighters.Name(item.Fighter) + " " + item.TitleNamed(null).ToLowerInvariant();
-                string zip = Path.Combine(folder, clean + " - " + item.Prefix + ".zip");
+                string zip = Path.Combine(AppFolders.PackagesFor(item), clean + " - " + item.Prefix + ".zip");
                 say("Putting " + name + " in as " + into + "...");
                 try
                 {
@@ -313,9 +318,9 @@ namespace ExMoreStuff
                 Installed other = shared == null ? null : records.FirstOrDefault(r => r.Item.IsStage && r.Item.Code == code && r.Item.Id != itemId);
                 if (other != null) { result.Problems.Add(stage.Describe + ": your " + other.Item.TitleNamed(other.Shown ?? other.Item.Name) + " is in stage " + code + ", the code this stage shares with everyone; give yours another code in Advanced > Package codes first"); continue; }
                 if (shared != null) result.Shared = true;
-                if (code == null) { result.Problems.Add(stage.Describe + ": all stage codes C" + FirstPersonalStage + "-C" + LastPersonalStage + " are in use"); continue; }
+                if (code == null) { result.Problems.Add(stage.Describe + ": all personal stage codes (U01-U99, 0U0-9U9, 00U-99U) are in use"); continue; }
                 string title = stages.Count > 1 ? name + " - " + stage.Describe : name;
-                string zip = Path.Combine(folder, clean + " - " + code + (stages.Count > 1 ? " " + stage.Code : "") + ".zip");
+                string zip = Path.Combine(AppFolders.StagePackages, clean + " - " + code + (stages.Count > 1 ? " " + stage.Code : "") + ".zip");
                 var item = new Item
                 {
                     Id = itemId, Type = "stage", Fighter = "", Slot = 0, Code = code, Name = title, Author = author ?? "", Version = version,

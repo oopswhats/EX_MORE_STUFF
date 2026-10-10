@@ -57,31 +57,46 @@ namespace ExMoreStuff
         }
     }
 
-    // The few things remembered between runs (only the game folder), in settings.json beside the program (AppFolders).
+    // The few things remembered between runs (the game folder; packages kept in the game without their zip), in
+    // settings.json beside the program (AppFolders).
     static class Settings
     {
         static string SettingsFile { get { return AppFolders.DataFile("settings.json"); } }
 
+        static Dictionary<string, object> Read()
+        {
+            try { return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(SettingsFile)) ?? new Dictionary<string, object>(); }
+            catch (Exception) { return new Dictionary<string, object>(); }
+        }
+
+        static void Write(string key, object value)
+        {
+            var j = Read();
+            j[key] = value;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile));
+                File.WriteAllText(SettingsFile, new JavaScriptSerializer().Serialize(j));
+            }
+            catch (Exception) { }
+        }
+
         public static string GameFolder
+        {
+            get { object v; return Read().TryGetValue("gameFolder", out v) && v != null ? Convert.ToString(v) : null; }
+            set { Write("gameFolder", value); }
+        }
+
+        /// <summary>Packages (Item.Key) the player chose to keep in the game after deleting their zip: not asked about again.</summary>
+        public static List<string> KeptWithoutZip
         {
             get
             {
-                try
-                {
-                    var j = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(SettingsFile));
-                    return j != null && j.ContainsKey("gameFolder") ? Convert.ToString(j["gameFolder"]) : null;
-                }
-                catch (Exception) { return null; }
+                object v;
+                var list = Read().TryGetValue("keptWithoutZip", out v) ? v as System.Collections.ArrayList : null;
+                return list == null ? new List<string>() : list.Cast<object>().Select(Convert.ToString).ToList();
             }
-            set
-            {
-                try
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile));
-                    File.WriteAllText(SettingsFile, new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "gameFolder", value } }));
-                }
-                catch (Exception) { }
-            }
+            set { Write("keptWithoutZip", value); }
         }
     }
 }

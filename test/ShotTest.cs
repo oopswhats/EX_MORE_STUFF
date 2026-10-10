@@ -24,7 +24,18 @@ static class ShotTest
         Application.SetCompatibleTextRenderingDefault(false);
         Assembly program = Assembly.LoadFrom(args[0]);
         folder = args[1];
+        Directory.CreateDirectory(folder);
         string fighter = args.Length > 2 ? args[2] : "RYU";
+        // the program's own folder (Mods\, settings.json) is the exe's, not this test's; and only a made-up game (an empty
+        // SSFIV.exe): on a real one the window would take the player's packages into this Mods\ when it opens
+        program.GetType("ExMoreStuff.AppFolders").GetProperty("Root").SetValue(null, Path.GetDirectoryName(Path.GetFullPath(args[0])));
+        string game = (string)program.GetType("ExMoreStuff.Settings").GetProperty("GameFolder").GetValue(null);
+        string exe = game == null ? null : Path.Combine(game, "SSFIV.exe");
+        if (exe == null || !File.Exists(exe) || new FileInfo(exe).Length > 0)
+        {
+            Console.Error.WriteLine("settings.json beside the exe must point at a made-up game folder (an empty SSFIV.exe), not " + (game ?? "nothing"));
+            Environment.Exit(2);
+        }
         form = (Form)Activator.CreateInstance(program.GetType("ExMoreStuff.MainForm"), true);
         int step = 0;
         var timer = new Timer { Interval = 1500 };
@@ -53,7 +64,8 @@ static class ShotTest
                     ((Control)Inner(page9, "stage")).Text = "B01";
                     break;
                 }
-                case 10: Save("freecodes_check"); SetField("openTool", null); Call("ShowTab", Field("communityTab")); break;
+                case 10: Save("freecodes_check"); SetField("openTool", "oldmods"); Call("ShowTab", Field("advancedTab")); break;
+                case 11: Save("oldmods"); SetField("openTool", null); Call("ShowTab", Field("communityTab")); break;
                 case 15:
                     Save("community");
                     var community = (ScrollableControl)Inner(Field("communityPage"), "list");

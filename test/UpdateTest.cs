@@ -32,7 +32,7 @@ namespace ExMoreStuff
                     }
                 else
                 {
-                    byte[] data = Container(code + "_SetupObj.lua", Encoding.ASCII.GetBytes("\0\0\0Setup\0SetFloorHeight\0"));
+                    byte[] data = Container(code + "_SetupObj.lua", Encoding.ASCII.GetBytes("\0\0\0Setup\0"));
                     using (Stream s = zip.CreateEntry("STG_" + code + ".emz").Open()) s.Write(data, 0, data.Length);
                 }
             }
@@ -89,11 +89,6 @@ namespace ExMoreStuff
             Check(!Installer.Outdated(after[0], latest), "no update left");
             Check(!Installer.Outdated(new Installed { Item = old, Source = "file" }, latest), "a player's own package never shows an update");
 
-            Console.WriteLine("Custom stage check");
-            string bad = Package(real, packages, 21, null, null);
-            try { Installer.InstallPackage(game, StageItem(21, "1.0", bad), bad, "catalog"); Check(false, "refused"); }
-            catch (InvalidDataException ex) { Check(ex.Message.Contains("SetFloorHeight"), "refused: " + ex.Message); }
-            Check(!File.Exists(Path.Combine(game, "patch_ae2_tu3", "battle", "stage", "STG_C21.emz")), "nothing written");
 
             Console.WriteLine("Program version");
             string catalog = Path.Combine(game, "catalog.json");

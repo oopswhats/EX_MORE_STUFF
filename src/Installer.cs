@@ -156,15 +156,6 @@ namespace ExMoreStuff
             if (item.IsStage)
             {
                 if (!names.Contains(item.Prefix + ".emz")) return "missing " + item.Prefix + ".emz";
-                // Players without a custom stage play its fallback, so its scripts must leave the fighters alone.
-                ZipArchiveEntry main = zip.Entries.First(e => e.Name.Equals(item.Prefix + ".emz", StringComparison.OrdinalIgnoreCase));
-                using (var data = new MemoryStream())
-                {
-                    using (Stream s = main.Open()) s.CopyTo(data);
-                    var calls = StagePack.GameplayCallsIn(data.ToArray());
-                    if (calls.Count > 0)
-                        return "its scripts change where the fighters stand (" + string.Join(", ", calls) + "), so players without it would play a different match online";
-                }
             }
             else if (item.IsColor)
             {
@@ -379,36 +370,63 @@ namespace ExMoreStuff
             catch (Exception) { return false; }
         }
 
-        /// <summary>From before the Mods folder: each package's zip (in the game or switched off) comes into `library`.
-        /// EX More Stuff's own builds (patch_ae2_tu3\ex_more_stuff_mods) are moved; the player's own zips are copied, theirs
-        /// staying where they are; a zip that isn't there any more is left as it is. Returns how many came.</summary>
-        public static int AdoptPackages(string game, string library)
+        /// <summary>Each package's zip (in the game or switched off) into its place in Mods\ (AppFolders.PackagesFor:
+        /// Stages\, or Characters\<the fighter>\). Zips already in Mods\ and EX More Stuff's own builds from before it
+        /// (patch_ae2_tu3\ex_more_stuff_mods) are moved; the player's own zips elsewhere are copied, theirs staying where
+        /// they are; a zip that isn't there any more is left as it is. Returns how many packages moved.</summary>
+        public static int AdoptPackages(string game)
         {
             var records = Load(game);
             var removed = Removed(game);
             string old = Path.Combine(Game.PatchFolder(game), "ex_more_stuff_mods");
-            var done = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // a zip two packages share comes once
             int count = 0;
-            foreach (Installed r in records.Concat(removed))
+            // a zip two packages share moves once; one with several fighters' packages stays in Mods\ itself
+            foreach (var group in records.Concat(removed).Where(r => !string.IsNullOrEmpty(r.Package)).GroupBy(r => Path.GetFullPath(r.Package), StringComparer.OrdinalIgnoreCase))
             {
-                if (string.IsNullOrEmpty(r.Package) || AppFolders.Inside(r.Package, library)) continue;
-                string to;
-                if (!done.TryGetValue(r.Package, out to))
-                {
-                    if (!File.Exists(r.Package)) continue;
-                    Directory.CreateDirectory(library);
-                    to = AppFolders.PlaceFor(library, Path.GetFileName(r.Package), r.Package);
-                    if (!File.Exists(to)) File.Copy(r.Package, to);
-                    if (AppFolders.Inside(r.Package, old)) File.Delete(r.Package);
-                    done[r.Package] = to;
-                }
-                r.Package = to;
-                count++;
+                string from = group.Key;
+                var folders = group.Select(r => AppFolders.PackagesFor(r.Item)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                string folder = folders.Count == 1 ? folders[0] : AppFolders.Mods;
+                if (string.Equals(Path.GetDirectoryName(from), Path.GetFullPath(folder).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase) || !File.Exists(from)) continue;
+                bool move = AppFolders.Inside(from, AppFolders.Mods) || AppFolders.Inside(from, old);
+                Directory.CreateDirectory(folder);
+                string to = AppFolders.PlaceFor(folder, Path.GetFileName(from), from);
+                if (!File.Exists(to)) { if (move) File.Move(from, to); else File.Copy(from, to); }
+                else if (AppFolders.Inside(from, old)) File.Delete(from);
+                foreach (Installed r in group) r.Package = to;
+                count += group.Count();
             }
             if (count > 0) Save(game, records, removed);
             try { if (Directory.Exists(old) && !Directory.EnumerateFileSystemEntries(old).Any()) Directory.Delete(old); }
             catch (IOException) { }
             return count;
+        }
+
+        /// <summary>The player's own packages (in the game or switched off) whose zip is gone: deleted from the Mods folder
+        /// by hand. Not ones on a drive that isn't there now (a USB stick, a network drive): those may come back.</summary>
+        public static List<Installed> MissingPackages(string game)
+        {
+            return Load(game).Concat(Removed(game)).Where(r =>
+            {
+                if (r.Source != "file" || string.IsNullOrEmpty(r.Package)) return false;
+                try { return !File.Exists(r.Package) && Directory.Exists(Path.GetPathRoot(Path.GetFullPath(r.Package))); }
+                catch (Exception) { return false; }
+            }).GroupBy(r => r.Item.Key).Select(g => g.First()).ToList();
+        }
+
+        /// <summary>What a file was added as before (Add Mod From File), or null: the same zip as a package's own (kept in
+        /// Mods\), or a mod file installed from the same file (its packages' ids carry the file's MD5), whatever it's
+        /// called now.</summary>
+        public static string AddedBefore(string game, string path)
+        {
+            var records = Load(game).Concat(Removed(game)).ToList();
+            long size = new FileInfo(path).Length;
+            Func<Installed, string> named = r => (r.Item.IsStage ? "" : Fighters.Name(r.Item.Fighter) + " ") + r.Item.TitleNamed(r.Shown ?? r.Item.Name);
+            foreach (Installed r in records)
+                if (r.Source == "file" && !string.IsNullOrEmpty(r.Package) && File.Exists(r.Package) && new FileInfo(r.Package).Length == size && AppFolders.SameContent(r.Package, path))
+                    return named(r);
+            string id = "file:" + ModFile.Md5(path).Substring(0, 16) + ":";
+            Installed made = records.FirstOrDefault(r => r.Item.Id != null && r.Item.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase));
+            return made == null ? null : named(made);
         }
 
         // Takes a removed package of the player's off the list.
@@ -418,7 +436,7 @@ namespace ExMoreStuff
             if (removed.RemoveAll(r => r.Item.Key == key) > 0) Save(game, Load(game), removed);
         }
 
-        // A player's own package (zip): what it is, from its main file's name (KEN_75.obj.emo, STG_C80.emz, STG_D05.emz,
+        // A player's own package (zip): what it is, from its main file's name (KEN_75.obj.emo, STG_U01.emz, STG_D05.emz,
         // RYU_01_30.col.emb: a new color).
         /// <summary>The item a complete EX More Stuff package installs as (a zip: a costume slot 8-99 with all its files, or
         /// a stage code of its own that leaves the fighters alone), or null: not one.</summary>
