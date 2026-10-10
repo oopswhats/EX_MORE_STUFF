@@ -447,6 +447,7 @@ namespace ExMoreStuff
         {
             Image image;
             if (costume >= Catalog.FirstCustomCostume && pictures.TryGetValue("costume:" + fighter + ":" + costume, out image) && image != null) return image;
+            if (costume < Catalog.FirstCustomCostume && (image = CostumeArt.Picture(fighter, costume, 1)) != null) return image;   // the game's own, in color 1
             return portraits.TryGetValue(fighter, out image) ? image : null;
         }
 
@@ -471,7 +472,7 @@ namespace ExMoreStuff
                        (t, source) => source == null ? null : CostumeSwaps.Problem(folder, fighter, costume, number(source)),
                        "Pick what you'd like to see whenever " + Fighters.Name(fighter) + "'s " + name + " is picked: the Original costume or one you installed " +
                        "(the game's alternates and DLC costumes can't stand in for another). EX More Stuff puts a copy in its place; the game's own files are kept " +
-                       "and come back when you choose it as it is again.\n\nOnly you see it, online too: your opponent sees their own " + name + ".", "As it is"))
+                       "and come back when you choose it as it is again.\n\nOnly you see it, online too: your opponent sees their own " + name + ".", "As it is", "costume"))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 if (dialog.Choice == null) wantedSwaps.Remove(target);

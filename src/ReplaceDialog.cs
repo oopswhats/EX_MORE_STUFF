@@ -7,7 +7,7 @@ using System.Windows.Forms;
 namespace ExMoreStuff
 {
     // Choosing what plays in a game stage's place on this PC: the stage itself (the original), a custom stage or
-    // another game stage. Each choice is checked (both stages must be scenery only) before it can be used.
+    // another game stage (or, worded for it, what plays as a game costume). Each choice is checked before it can be used.
     class ReplaceDialog : Form
     {
         public string Choice { get; private set; }     // null: the original
@@ -20,11 +20,13 @@ namespace ExMoreStuff
         readonly FlatButton use = new FlatButton("Use this stage", true);
         int check;
 
-        // `about` and `self` word it for something else than a stage (a costume): the text at the top, and the label on
-        // the tile that keeps it as it is
+        // `about`, `self` and `thing` word it for something else than a stage (a costume): the text at the top, the label on
+        // the tile that keeps it as it is, and the button ("Use this costume")
         public ReplaceDialog(string stage, string current, IEnumerable<string> sources, Func<string, string> name,
-                             Func<string, Image> picture, Func<string, string, string> problem, string about = null, string self = "Original")
+                             Func<string, Image> picture, Func<string, string, string> problem, string about = null, string self = "Original", string thing = "stage")
         {
+            use.Text = "Use this " + thing;
+            use.Width = TextRenderer.MeasureText(use.Text, use.Font).Width + 36;
             this.stage = stage;
             this.name = name;
             this.problem = problem;

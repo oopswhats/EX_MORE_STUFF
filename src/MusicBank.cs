@@ -106,31 +106,100 @@ namespace ExMoreStuff
         public static int CueCount(byte[] bank) { return Sub(UtfTable.Read(bank), "CUE").Rows.Count; }
 
         /// <summary>How loud the game plays a cue's sound, from the bank's synths: the track's volume (of 1000) times
-        /// its loudest waveform's volume (of 1000) and front send (dry0/dry1, of 255). A stage's main theme: 1000 ×
-        /// 400 × 229 ≈ 0.36 (-9 dB); its Ultra and low-health layers differ a little. 1 when it can't be read.</summary>
+        /// its loudest waveform's volume (of 1000) and front send (dry0/dry1, of 255; a waveform with no sends set at
+        /// all, as Ultra's new fighters' themes have, plays at full). A stage's main theme: 1000 × 400 × 229 ≈ 0.36
+        /// (-9 dB); its Ultra and low-health layers differ a little. 1 when it can't be read.</summary>
         public static double MixGain(byte[] bank, int cue)
         {
             try
             {
-                var csb = UtfTable.Read(bank);
-                var cues = Sub(csb, "CUE");
-                var synths = Sub(csb, "SYNTH");
-                if (cue >= cues.Rows.Count) return 1;
-                Func<int, string, double> number = (row, column) => synths.Column(column) >= 0 && synths.Get(row, column) != null ? Convert.ToDouble(synths.Get(row, column)) : -1;
-                int track = Row(synths, "synname", (string)cues.Get(cue, "synth"));
-                if (track < 0) return 1;
-                double trackVolume = number(track, "volume") >= 0 ? number(track, "volume") / 1000 : 1, loudest = 0;
-                foreach (string link in ((string)synths.Get(track, "lnkname") ?? "").Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                double loudest = 0;
+                Waveforms(UtfTable.Read(bank), cue, (synths, track, w, trackVolume, send) =>
                 {
-                    int w = Row(synths, "synname", link);
-                    if (w < 0) continue;
-                    double volume = number(w, "volume") >= 0 ? number(w, "volume") / 1000 : 1;
-                    double send = Math.Max(Math.Max(number(w, "dry0"), number(w, "dry1")), 0) / 255;
-                    loudest = Math.Max(loudest, volume * send);
-                }
-                return loudest > 0 ? trackVolume * loudest : 1;
+                    double volume = Number(synths, w, "volume") >= 0 ? Number(synths, w, "volume") / 1000 : 1;
+                    loudest = Math.Max(loudest, trackVolume * volume * send);
+                });
+                return loudest > 0 ? loudest : 1;
             }
             catch (Exception) { return 1; }
+        }
+
+        static double Number(UtfTable synths, int row, string column)
+        {
+            return synths.Column(column) >= 0 && synths.Get(row, column) != null ? Convert.ToDouble(synths.Get(row, column)) : -1;
+        }
+
+        // each waveform synth a cue's track plays: (synths, track row, waveform row, track volume 0..1, front send 0..1)
+        static void Waveforms(UtfTable csb, int cue, Action<UtfTable, int, int, double, double> each)
+        {
+            var cues = Sub(csb, "CUE");
+            var synths = Sub(csb, "SYNTH");
+            if (cue >= cues.Rows.Count) return;
+            int track = Row(synths, "synname", (string)cues.Get(cue, "synth"));
+            if (track < 0) return;
+            double trackVolume = Number(synths, track, "volume") >= 0 ? Number(synths, track, "volume") / 1000 : 1;
+            foreach (string link in ((string)synths.Get(track, "lnkname") ?? "").Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                int w = Row(synths, "synname", link);
+                if (w < 0) continue;
+                double send = 0;
+                bool any = false;
+                for (int d = 0; d < 8; d++) { double v = Number(synths, w, "dry" + d); if (v > 0) any = true; }
+                send = any ? Math.Max(Math.Max(Number(synths, w, "dry0"), Number(synths, w, "dry1")), 0) / 255 : 1;
+                each(synths, track, w, trackVolume, send);
+            }
+        }
+
+        /// <summary>The loudest the bank can play a cue (its waveforms' volumes at 1000).</summary>
+        public static double MaxLevel(byte[] bank, int cue)
+        {
+            try
+            {
+                double max = 0;
+                Waveforms(UtfTable.Read(bank), cue, (synths, track, w, trackVolume, send) => max = Math.Max(max, trackVolume * send));
+                return max > 0 ? max : 1;
+            }
+            catch (Exception) { return 1; }
+        }
+
+        /// <summary>The bank with a cue played at `level` (as MixGain reads it): its waveforms' volumes set, as near as
+        /// they go (1 to 1000); the track's volume and the sends stay. Each layer has synths of its own.</summary>
+        public static byte[] SetLevel(byte[] bank, int cue, double level)
+        {
+            var csb = UtfTable.Read(bank);
+            int synRow = Row(csb, "name", "SYNTH");
+            UtfTable synths = null;
+            Waveforms(csb, cue, (s, track, w, trackVolume, send) =>
+            {
+                synths = s;
+                if (s.Column("volume") < 0 || trackVolume <= 0 || send <= 0) return;
+                double volume = Math.Round(1000 * level / (trackVolume * send));
+                volume = Math.Max(1, Math.Min(1000, volume));
+                object old = s.Get(w, "volume");
+                s.Set(w, "volume", Convert.ChangeType(volume, old != null ? old.GetType() : typeof(ushort)));
+            });
+            if (synths == null) return bank;
+            csb.Set(synRow, "utf", synths.Write());
+            return csb.Write();
+        }
+
+        /// <summary>The bank with a cue played at the level the game's own bank plays it: its waveforms' volumes copied
+        /// from the game's synths of the same names.</summary>
+        public static byte[] GameLevel(byte[] bank, byte[] game, int cue)
+        {
+            var gameSynths = Sub(UtfTable.Read(game), "SYNTH");
+            var csb = UtfTable.Read(bank);
+            int synRow = Row(csb, "name", "SYNTH");
+            UtfTable synths = null;
+            Waveforms(csb, cue, (s, track, w, trackVolume, send) =>
+            {
+                synths = s;
+                int g = Row(gameSynths, "synname", (string)s.Get(w, "synname"));
+                if (g >= 0 && s.Column("volume") >= 0 && gameSynths.Column("volume") >= 0) s.Set(w, "volume", gameSynths.Get(g, "volume"));
+            });
+            if (synths == null) return bank;
+            csb.Set(synRow, "utf", synths.Write());
+            return csb.Write();
         }
 
         /// <summary>A cue's song: intro then loop, decoded; LoopStart = the intro's length, LoopEnd = the end.</summary>

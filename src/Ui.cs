@@ -791,11 +791,31 @@ namespace ExMoreStuff
         }
     }
 
-    // The About page's credits: logo, the EX MORE STUFF lettering, version, who made it.
+    // The About page's credits: logo, the EX MORE STUFF lettering, version, who made it, and a link to USF4's mods on
+    // GameBanana (hovered, it says why the program only uses GameBanana).
     class AboutCard : Clear
     {
+        public const string GameBananaPage = "https://gamebanana.com/games/6971";
+        const string WhyGameBanana =
+            "Why only GameBanana?\n" +
+            "\n" +
+            "GameBanana is where USF4\u2019s modders can share their work, and it checks every file for\n" +
+            "viruses before anyone downloads it. EX More Stuff only offers the files that passed.\n" +
+            "\n" +
+            "It also lists every mod and its files in the open, so EX More Stuff can show them here, make\n" +
+            "sure each download is the real file, and give each skin the same place for everyone, so\n" +
+            "players see each other\u2019s skins in rollback matches.\n" +
+            "\n" +
+            "DeviantArt requires a user login to download mods, it limits user downloads, its files\n" +
+            "aren\u2019t checked for viruses, and it has no list of mods that EX More Stuff can read and be\n" +
+            "accurate, so EX More Stuff couldn\u2019t check them or keep them in order. We tried it and left\n" +
+            "it out.\n" +
+            "\n" +
+            "Nexus Mods needs an account to download, and downloading from inside another program is only\n" +
+            "for its paying members, so it wouldn\u2019t work for everyone.";
         readonly Image logo, wordmark;
         readonly string version;
+        readonly ToolTip why = new ToolTip { AutoPopDelay = 30000, InitialDelay = 300, ReshowDelay = 100 };
 
         public AboutCard(Image logo, Image wordmark, string version)
         {
@@ -803,7 +823,21 @@ namespace ExMoreStuff
             this.wordmark = wordmark;
             System.Version v;
             this.version = System.Version.TryParse(version, out v) ? v.Major + "." + v.Minor : version;
-            Size = new Size(520, 258);
+            Size = new Size(520, 288);
+            var link = new LinkLabel
+            {
+                Text = "USF4 mods on GameBanana  \u203a", AutoSize = true, BackColor = Color.Transparent, Font = Theme.Bold(9f),
+                LinkColor = Theme.Accent, ActiveLinkColor = Color.White, LinkBehavior = LinkBehavior.HoverUnderline, Location = new Point(141, 252),
+            };
+            link.LinkClicked += (s, e) => { try { System.Diagnostics.Process.Start(GameBananaPage); } catch (Exception) { } };
+            why.SetToolTip(link, WhyGameBanana);
+            Controls.Add(link);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) why.Dispose();
+            base.Dispose(disposing);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -832,6 +866,63 @@ namespace ExMoreStuff
                 Theme.Font(8f), Theme.Muted, new Rectangle(143, 162, Width - 160, 34), flags | TextFormatFlags.WordBreak);
             Theme.Draw(g, "Costume pictures: SF4 Ember's selection art (photos by Street Fighter Galleries, EventHubs and the Street Fighter Wiki). Game art © Capcom.",
                 Theme.Font(8f), Theme.Muted, new Rectangle(143, 198, Width - 160, 50), flags | TextFormatFlags.WordBreak);
+        }
+    }
+
+    // A drop-down menu in the window's colors: dark, the hover a little lighter, headers muted.
+    class DarkMenu : ToolStripProfessionalRenderer
+    {
+        static readonly Color Back = Color.FromArgb(22, 24, 30), Border = Color.FromArgb(70, 74, 84);
+
+        DarkMenu() : base(new Colors()) { RoundedEdges = false; }
+
+        public static ContextMenuStrip Create()
+        {
+            var menu = new ContextMenuStrip();
+            Style(menu);
+            return menu;
+        }
+
+        public static void Style(ToolStripDropDown drop)
+        {
+            drop.Renderer = new DarkMenu();
+            drop.BackColor = Back;
+            drop.ForeColor = Theme.Text;
+            drop.Font = Theme.Font(9.5f);
+            var menu = drop as ToolStripDropDownMenu;
+            if (menu != null) menu.ShowImageMargin = false;
+        }
+
+        /// <summary>A line that names a group of the menu's items (not clickable).</summary>
+        public static ToolStripItem Header(string text) { return new ToolStripLabel(text) { Font = Theme.Bold(8.5f), ForeColor = Theme.Muted, Margin = new Padding(6, 4, 0, 2) }; }
+
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            if (e.Item is ToolStripMenuItem) e.TextColor = e.Item.Enabled ? Theme.Text : Theme.Muted;
+            base.OnRenderItemText(e);
+        }
+
+        protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+        {
+            e.ArrowColor = Theme.Text;
+            base.OnRenderArrow(e);
+        }
+
+        sealed class Colors : ProfessionalColorTable
+        {
+            public override Color ToolStripDropDownBackground { get { return Back; } }
+            public override Color MenuBorder { get { return Border; } }
+            public override Color MenuItemBorder { get { return Theme.Accent; } }
+            public override Color MenuItemSelected { get { return Theme.ButtonHover; } }
+            public override Color MenuItemSelectedGradientBegin { get { return Theme.ButtonHover; } }
+            public override Color MenuItemSelectedGradientEnd { get { return Theme.ButtonHover; } }
+            public override Color MenuItemPressedGradientBegin { get { return Theme.Button; } }
+            public override Color MenuItemPressedGradientEnd { get { return Theme.Button; } }
+            public override Color ImageMarginGradientBegin { get { return Back; } }
+            public override Color ImageMarginGradientMiddle { get { return Back; } }
+            public override Color ImageMarginGradientEnd { get { return Back; } }
+            public override Color SeparatorDark { get { return Border; } }
+            public override Color SeparatorLight { get { return Back; } }
         }
     }
 

@@ -15,6 +15,7 @@ namespace ExMoreStuff
         public string Name;
         public int LoopStart = -1, LoopEnd = -1;   // from the file (a WAV's loop, a game theme's), or -1
         public string Settings;                     // EX More Stuff's own, saved with a WAV
+        public bool GameLoop;                       // the loop is the game's own (a game theme's, SFxT's): seamless as it is
         public int Frames { get { return Pcm.Length / Channels; } }
         public double Seconds { get { return Frames / (double)Rate; } }
     }

@@ -57,7 +57,7 @@ namespace ExMoreStuff
         }
     }
 
-    // The few things remembered between runs (the game folder; packages kept in the game without their zip), in
+    // The few things remembered between runs (the game folder; SFxT's folder; packages kept in the game without their zip), in
     // settings.json beside the program (AppFolders).
     static class Settings
     {
@@ -85,6 +85,13 @@ namespace ExMoreStuff
         {
             get { object v; return Read().TryGetValue("gameFolder", out v) && v != null ? Convert.ToString(v) : null; }
             set { Write("gameFolder", value); }
+        }
+
+        /// <summary>Street Fighter X Tekken's folder, once chosen for its music (Music page), or null.</summary>
+        public static string SfxtFolder
+        {
+            get { object v; return Read().TryGetValue("sfxtFolder", out v) && v != null ? Convert.ToString(v) : null; }
+            set { Write("sfxtFolder", value); }
         }
 
         /// <summary>Packages (Item.Key) the player chose to keep in the game after deleting their zip: not asked about again.</summary>

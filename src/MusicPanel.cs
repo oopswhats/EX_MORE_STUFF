@@ -40,14 +40,20 @@ namespace ExMoreStuff
         Dictionary<string, InstalledSong> installed = new Dictionary<string, InstalledSong>(StringComparer.OrdinalIgnoreCase);
         string listProblem;             // the songs list can't be read: shown, and nothing is put in or given back
         readonly List<SlotRow> rows = new List<SlotRow>();
-        readonly Dictionary<string, double> loudness = new Dictionary<string, double>();   // the game's layers' loudness
+        // How loud the game's music is, generally (test\VolumeScan.cs over every stage and fighter theme): each song
+        // itself about -11.5 LUFS, played by its bank about 8.5 dB down, so heard at about -20 LUFS on a stage's main
+        // and Ultra layers and on fighter themes, and 0.7 under that on low health (the medians; banks range from
+        // -26 to -17). "Match game volume" brings a song itself to TypicalSong and sets its bank's level for each layer
+        // to be heard at TypicalHeard, whatever slot it goes on (a slot's own music may be quieter or louder).
+        internal static readonly double[] TypicalHeard = { -20.0, -20.0, -20.7 };
+        internal const double TypicalSong = -11.5;
         short[] preview;                // the song as it would go in (seam smoothed, volume set), for playback
         string previewKey;
         double volumeDb;
 
         readonly ScrollList list = new ScrollList { FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(4, 4, 0, 4) };
         readonly Label title = MakeLabel(Theme.Bold(14f), Theme.Text), now = MakeLabel(Theme.Font(9f), Theme.Muted), songLabel = MakeLabel(Theme.Bold(9.5f), Theme.Text);
-        readonly FlatButton openSong = new FlatButton("Open a song..."), openGame = new FlatButton("Open what the game plays here");
+        readonly FlatButton openSong = new FlatButton("Open a song..."), openGame = new FlatButton("Open what the game plays here"), openSfxt = new FlatButton("From SFxT...");
         readonly WaveformView wave = new WaveformView();
         readonly SeamView seam = new SeamView();
         readonly FlatButton play = Small("Play"), stop = Small("Stop"), testLoop = Small("Test the loop"),
@@ -83,7 +89,7 @@ namespace ExMoreStuff
             clock.TextAlign = ContentAlignment.MiddleRight;
             Controls.AddRange(new Control[]
             {
-                title, now, openSong, songsFolder, openGame, songLabel, clock, wave, play, stop, testLoop, loop, bassPreview, gameLevel, whole, atStart, atEnd,
+                title, now, openSfxt, openSong, songsFolder, openGame, songLabel, clock, wave, play, stop, testLoop, loop, bassPreview, gameLevel, whole, atStart, atEnd,
                 startLabel, startBox, startHere, endLabel, endBox, endHere, lengthLabel, find, fit, matchLabel, seam,
                 snap, loud, smooth, volumeLabel, quieter, volumeBox, louder, volumeNote,
                 roundLabel, round, layerLabel, layer, roundNote, ultraLabel, ultraMode, lowLabel, lowMode, layerNote,
@@ -100,6 +106,7 @@ namespace ExMoreStuff
             volumeBox.Text = "0.0";
 
             openSong.Click += async (s, e) => await OpenSong();
+            openSfxt.Click += async (s, e) => await OpenSfxt();
             songsFolder.Click += (s, e) =>
             {
                 try { Directory.CreateDirectory(AppFolders.Music); System.Diagnostics.Process.Start("explorer.exe", "\"" + AppFolders.Music + "\""); }
@@ -142,11 +149,13 @@ namespace ExMoreStuff
             timer.Start();
 
             tips.SetToolTip(openSong, "A WAV, MP3, FLAC, M4A or WMA file, or a game music file (.csb). A song from your songs folder opens with its loop and settings");
+            tips.SetToolTip(openSfxt, "Music from your Street Fighter X Tekken: its stages' themes and the rest, each with its own loop (read from the game, never changed)");
             tips.SetToolTip(songsFolder, "Your songs: every song put in the game or saved, with its loop and settings and the game file it made (" + AppFolders.Music + ")");
             tips.SetToolTip(openGame, "What this stage or fighter plays now (the round and layer picked), with its loop");
             tips.SetToolTip(testLoop, "Plays the last 4 seconds before the loop end and the jump back to the loop start, over and over");
             tips.SetToolTip(bassPreview, "Plays the song with its bass (and a little of its mids) cut, as the low-health layer's \"Bass cut\" puts it in");
-            tips.SetToolTip(loud, "Makes the song sound as loud as the game's own music here (measured as ears hear it, in LUFS); a limiter keeps its peaks from clipping");
+            tips.SetToolTip(loud, "Makes the song as loud in the game as the game's music generally is (measured over every stage and fighter theme, as ears hear it), " +
+                                  "whatever stage or fighter it goes on. Off: it plays at the level this slot's own music is played at");
             tips.SetToolTip(gameLevel, "Plays at the level the game plays this music, from its music file's mix (about 9 dB down for a stage's main layer), " +
                 "so it sounds as it will in a match; your in-game music volume setting lowers it further");
             tips.SetToolTip(whole, "Zooms out to the whole song");
@@ -200,7 +209,6 @@ namespace ExMoreStuff
         {
             game = folder;
             player.Stop();
-            loudness.Clear();
             mixGains.Clear();
             LoadInstalled();
             list.SuspendLayout();
@@ -296,6 +304,7 @@ namespace ExMoreStuff
                     loaded = MusicBank.Decode(File.ReadAllBytes(path), 0, Path.GetFileNameWithoutExtension(path), out ls);
                     loaded.LoopStart = ls;
                     loaded.LoopEnd = loaded.Frames;
+                    loaded.GameLoop = true;
                 }
                 else
                 {
@@ -316,6 +325,64 @@ namespace ExMoreStuff
             else if (loaded.LoopStart < 0 && loaded.Frames > MusicBank.LongestSong) Say("Opened " + loaded.Name + ": songs in the game can be at most 10 minutes long", true);
             else if (loaded.LoopStart < 0) Say("Opened " + loaded.Name + ", a long song: press Find the loop to look for its loop (it takes a while)");
             else Say("Opened " + loaded.Name + " with its saved loop" + (loaded.Settings != null ? " and settings" : ""));
+        }
+
+        // Street Fighter X Tekken's music (the player's own SFxT, read only): a menu of its banks, the stages first, each
+        // with its songs (cues); the one picked opens like any song, with its own loop
+        async Task OpenSfxt()
+        {
+            string folder = SfxtMusic.Find();
+            if (folder == null)
+                using (var dialog = new FolderBrowserDialog { Description = "Choose your Street Fighter X Tekken folder (the one with \"resource\" and \"stream\" in it)." })
+                {
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    if (!SfxtMusic.IsInstall(dialog.SelectedPath)) { Say("That isn't Street Fighter X Tekken's folder (it has no resource\\CMN\\battle\\sound\\bgm)", true); return; }
+                    folder = dialog.SelectedPath;
+                }
+            ExMoreStuff.Settings.SfxtFolder = folder;
+            List<SfxtMusic.Bank> banks = null;
+            if (!await Run("Reading Street Fighter X Tekken's music", () => banks = SfxtMusic.Banks(folder))) return;
+            if (banks.Count == 0) { Say("No music found in " + folder, true); return; }
+            ContextMenuStrip menu = DarkMenu.Create();
+            Action<ToolStripItemCollection, SfxtMusic.Bank, string> add = (items, bank, text) =>
+            {
+                if (bank.Cues.Count == 1)
+                {
+                    items.Add(new ToolStripMenuItem(text, null, async (s, e) => await OpenSfxtSong(bank, 0)));
+                    return;
+                }
+                var item = new ToolStripMenuItem(text);
+                DarkMenu.Style(item.DropDown);
+                for (int c = 0; c < bank.Cues.Count; c++)
+                {
+                    int cue = c;
+                    item.DropDownItems.Add(new ToolStripMenuItem(SfxtMusic.CueName(bank.Cues[c]), null, async (s, e) => await OpenSfxtSong(bank, cue)));
+                }
+                items.Add(item);
+            };
+            menu.Items.Add(DarkMenu.Header("Stages"));
+            foreach (var bank in banks.Where(b => b.Stage).OrderBy(b => b.Name == b.Code ? "~" + b.Code : b.Name, StringComparer.OrdinalIgnoreCase))
+                add(menu.Items, bank, bank.Name == bank.Code ? "Stage " + bank.Code : bank.Name);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(DarkMenu.Header("Other music"));
+            foreach (var bank in banks.Where(b => !b.Stage))
+            {
+                string cue = bank.Cues.Count == 1 ? bank.Cues[0] : null;
+                add(menu.Items, bank, bank.Code + (cue != null && cue != bank.Code && cue != "BGM_" + bank.Code ? "  \u00b7  " + cue : ""));
+            }
+            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+            menu.Show(openSfxt, new Point(0, openSfxt.Height));
+        }
+
+        async Task OpenSfxtSong(SfxtMusic.Bank bank, int cue)
+        {
+            Song loaded = null;
+            string name = bank.Name + " " + SfxtMusic.CueName(bank.Cues[cue]);
+            if (!await Run("Opening " + name + " from Street Fighter X Tekken", () => loaded = SfxtMusic.Load(bank, cue))) return;
+            songFile = null;
+            bool looped = loaded.LoopStart >= 0;
+            SetSong(loaded, Math.Max(0, loaded.LoopStart), looped ? loaded.LoopEnd : loaded.Frames);
+            Say("Opened " + name + " from Street Fighter X Tekken" + (looped ? " with its own loop" : ""));
         }
 
         // the file the game plays for the target, round fallbacks as Tom's mod does them (3 -> 2 -> 1)
@@ -342,6 +409,9 @@ namespace ExMoreStuff
             int ls = 0, cue = Layer;
             if (!await Run("Opening " + name, () => loaded = MusicBank.Decode(File.ReadAllBytes(path), cue, name, out ls))) return;
             songFile = null;
+            loaded.LoopStart = ls;
+            loaded.LoopEnd = loaded.Frames;
+            loaded.GameLoop = true;
             SetSong(loaded, ls, loaded.Frames);
             Say("This is what the game plays for " + name + (ours ? " now (from patch_ae2_tu3)" : ""));
         }
@@ -460,9 +530,18 @@ namespace ExMoreStuff
             if (!endBox.Focused) endBox.Text = Exact(le);
             lengthLabel.Text = "Intro " + WaveformView.Time(ls / (double)Song.Rate) + "   Loop " + WaveformView.Time((le - ls) / (double)Song.Rate);
             var pcm = Preview(false);
-            double match = LoopFinder.SeamMatch(pcm, ls, le);
-            matchLabel.Text = string.Format("Seam match {0:P0}", match);
-            matchLabel.ForeColor = match >= 0.9 ? Theme.GoodText : match >= 0.6 ? Theme.Text : Theme.Warning;
+            if (song.GameLoop && ls == song.LoopStart && le == song.LoopEnd)
+            {
+                // seamless as the game has it; ending at the song's end, there's nothing after it for the measure to compare
+                matchLabel.Text = "The game's own loop";
+                matchLabel.ForeColor = Theme.GoodText;
+            }
+            else
+            {
+                double match = LoopFinder.SeamMatch(pcm, ls, le);
+                matchLabel.Text = string.Format("Seam match {0:P0}", match);
+                matchLabel.ForeColor = match >= 0.9 ? Theme.GoodText : match >= 0.6 ? Theme.Text : Theme.Warning;
+            }
             seam.Show(pcm, ls, le);
             ShowVolume();
         }
@@ -499,31 +578,35 @@ namespace ExMoreStuff
                 catch (Exception) { g = 1; }
                 mixGains[key] = g;
             }
-            return g;
-        }
-
-        // how loud the game's own music for the target's layer sounds, in LUFS (read once per bank; -100 unknown)
-        double GameLoudness()
-        {
-            var t = Target;
-            string path = t == null || game == null ? null : MusicBank.GameFile(game, t.TemplateFile);
-            if (path == null) return -100;
-            string key = path + "|" + Layer;
-            double l;
-            if (!loudness.TryGetValue(key, out l))
+            var levels = Levels();
+            if (levels == null || song == null) return g;
+            // matched: the level it will go in at (the bass cut is 2 LU under the song), no louder than the bank can play
+            double raw = songLoudness + 20 * Math.Log10(Gain()) - (cue == 2 && bassPreview.Checked ? 2 : 0);
+            string maxKey = key + "|max";
+            double max;
+            if (!mixGains.TryGetValue(maxKey, out max))
             {
-                try { int x; l = MusicBank.Loudness(MusicBank.Decode(File.ReadAllBytes(path), Layer, "", out x).Pcm); }
-                catch (Exception) { l = -100; }
-                loudness[key] = l;
+                try { max = MusicBank.MaxLevel(File.ReadAllBytes(path), cue); }
+                catch (Exception) { max = 1; }
+                mixGains[maxKey] = max;
             }
-            return l;
+            return Math.Min(levels(cue, raw), max);
         }
 
+        // the song's own gain: matched, to the game's songs' own loudness (the volume goes on its bank's level instead);
+        // else the volume itself
         double Gain()
         {
-            double gain = Math.Pow(10, volumeDb / 20);
-            if (loud.Checked) gain *= MusicBank.MatchGain(songLoudness, GameLoudness());
-            return gain;
+            return loud.Checked ? MusicBank.MatchGain(songLoudness, TypicalSong) : Math.Pow(10, volumeDb / 20);
+        }
+
+        // matched: the level its bank should play each layer at, for that layer's sound of loudness `raw` (LUFS) to be
+        // heard as the game's music generally is, the volume on top; null when not matched (the slot's own levels)
+        Func<int, double, double> Levels() { return loud.Checked ? LevelsFor(volumeDb) : null; }
+
+        internal static Func<int, double, double> LevelsFor(double volume)
+        {
+            return (layer, raw) => raw <= -99 ? 1 : Math.Pow(10, (TypicalHeard[Math.Min(layer, 2)] + volume - raw) / 20);
         }
 
         // the gain, and how much the limiter holds the loudest peaks down (a lot squashes the song: turn it down)
@@ -578,8 +661,10 @@ namespace ExMoreStuff
         // the game file the song makes for the target (built on ours when one of our songs is already there, so the
         // other layers keep theirs), and the record of what each layer plays
         // (`game` and `have` are passed in: this runs away from the window, which may change them meanwhile)
-        static byte[] BuildFor(string game, Dictionary<string, InstalledSong> have, MusicSlot target, int layerIndex, short[] pcm, int ls, int le,
-                               string name, int ultra, int low, out InstalledSong about)
+        // `levels` (from Levels): each layer playing this song is set to be heard at the game's general loudness; null:
+        // those layers play at the game's own levels for the slot. Layers playing the game's sound always get its level.
+        internal static byte[] BuildFor(string game, Dictionary<string, InstalledSong> have, MusicSlot target, int layerIndex, short[] pcm, int ls, int le,
+                               string name, int ultra, int low, Func<int, double, double> levels, out InstalledSong about)
         {
             byte[] gameBank = File.ReadAllBytes(MusicBank.GameFile(game, target.TemplateFile));
             InstalledSong mine;
@@ -592,15 +677,25 @@ namespace ExMoreStuff
             int cues = MusicBank.CueCount(gameBank);
             bank = MusicBank.Build(bank, gameBank, layerIndex, pcm, ls, le);
             layers[layerIndex] = name;
+            double raw = levels != null ? MusicBank.Loudness(pcm) : 0;
+            Func<byte[], int, double, byte[]> level = (b, layer, loudness) =>
+                levels != null ? MusicBank.SetLevel(b, layer, Math.Min(levels(layer, loudness), MusicBank.MaxLevel(b, layer))) : MusicBank.GameLevel(b, gameBank, layer);
+            bank = level(bank, layerIndex, raw);
             if (layerIndex == 0 && cues >= 3)
             {
-                if (ultra == 0) { bank = MusicBank.Link(bank, gameBank, 1, 0, false); layers[1] = name; }
+                if (ultra == 0) { bank = MusicBank.Link(bank, gameBank, 1, 0, false); layers[1] = name; bank = level(bank, 1, raw); }
                 else bank = MusicBank.Link(bank, gameBank, 1, 1, ultra == 2);
-                if (ultra == 2) layers[1] = null;
-                if (low == 0) { bank = MusicBank.Link(bank, gameBank, 2, 0, false); layers[2] = name; }
-                else if (low == 1) { bank = MusicBank.Build(bank, gameBank, 2, MusicBank.LowHealthVersion(pcm), ls, le); layers[2] = name + BassCutNote; }
+                if (ultra == 2) { layers[1] = null; bank = MusicBank.GameLevel(bank, gameBank, 1); }
+                if (low == 0) { bank = MusicBank.Link(bank, gameBank, 2, 0, false); layers[2] = name; bank = level(bank, 2, raw); }
+                else if (low == 1)
+                {
+                    short[] cut = MusicBank.LowHealthVersion(pcm);
+                    bank = MusicBank.Build(bank, gameBank, 2, cut, ls, le);
+                    layers[2] = name + BassCutNote;
+                    bank = level(bank, 2, levels != null ? MusicBank.Loudness(cut) : 0);
+                }
                 else bank = MusicBank.Link(bank, gameBank, 2, 2, low == 3);
-                if (low == 3) layers[2] = null;
+                if (low == 3) { layers[2] = null; bank = MusicBank.GameLevel(bank, gameBank, 2); }
             }
             about = new InstalledSong { Song = layers[0] ?? name, LoopStart = ls, LoopEnd = le, Layers = layers };
             return bank;
@@ -619,10 +714,11 @@ namespace ExMoreStuff
             int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
             string name = song.Name, g = game, roundProblem = null, source = songFile, settings = Settings(), keepProblem = null;
             var have = installed;
+            var levels = Levels();
             if (!await Run("Putting " + name + " in the game", () =>
             {
                 InstalledSong about;
-                var bank = BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, out about);
+                var bank = BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, levels, out about);
                 MusicBank.Install(g, target, bank, about);
                 if (target.Round > 1) roundProblem = RoundMod.Ensure(g);   // Tom's Round BGM mod comes with round 2/3 music
                 // and kept in the songs folder, so giving the game's music back never loses it
@@ -647,10 +743,11 @@ namespace ExMoreStuff
             int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
             string settings = Settings(), name = song.Name, g = game, source = songFile, kept = null;
             var have = installed;
+            var levels = Levels();
             if (!await Run("Saving " + name, () =>
             {
                 InstalledSong about;
-                kept = MusicBank.Keep(target, layerIndex, name, BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, out about), source, ls, le, settings);
+                kept = MusicBank.Keep(target, layerIndex, name, BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, levels, out about), source, ls, le, settings);
             })) return;
             Say("Saved as " + kept + " in your songs folder (the folder button)");
             Toast.Show(this, "Songs saved to disk");   // always "songs" (user)
@@ -788,12 +885,14 @@ namespace ExMoreStuff
             list.Bounds = new Rectangle(6, 6, ListWidth - 12, h - 12);
 
             int x = ListWidth + Gap + 14, right = w - 14, ew = right - x;
-            title.Bounds = new Rectangle(x, 8, ew - 420, 28);
-            now.Bounds = new Rectangle(x, 36, ew - 420, 18);
+            title.Bounds = new Rectangle(x, 8, ew - 520, 28);
+            now.Bounds = new Rectangle(x, 36, ew - 520, 18);
             openGame.Location = new Point(right - openGame.Width, 10);
             songsFolder.Location = new Point(openGame.Left - songsFolder.Width - 8, 10);
             songsFolder.Height = openGame.Height;
             openSong.Location = new Point(songsFolder.Left - openSong.Width - 6, 10);
+            openSfxt.Location = new Point(openSong.Left - openSfxt.Width - 6, 10);
+            title.Width = now.Width = Math.Max(40, openSfxt.Left - x - 10);
             clock.Bounds = new Rectangle(right - 170, 60, 170, 20);
             gameLevel.Location = new Point(clock.Left - gameLevel.Width - 10, 57);
             songLabel.Bounds = new Rectangle(x, 60, gameLevel.Left - x - 10, 20);

@@ -37,7 +37,7 @@ namespace ExMoreStuff
             return null;
         }
 
-        static IEnumerable<string> SteamLibraries()
+        public static IEnumerable<string> SteamLibraries()
         {
             var libraries = new List<string>();
             string steam = null;
