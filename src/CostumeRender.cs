@@ -541,7 +541,11 @@ namespace ExMoreStuff
             for (int i = 0; i < parts.Count; i++)
                 foreach (var sub in parts[i].Subs)
                 {
-                    if (sub.Triangles.Length == 0 || sub.Texture >= textures.Count || textures[sub.Texture] == null) continue;
+                    // the game's texture list is the color's textures, then the .nml.emb's: some skins keep whole parts' textures
+                    // in the .nml.emb (user 2026-10-23: Ghoul Yang's head, mask and weapons were left out)
+                    int tex = sub.Texture;
+                    Texture texture = tex < textures.Count ? textures[tex] : tex - textures.Count < normals.Count ? normals[tex - textures.Count] : null;
+                    if (sub.Triangles.Length == 0 || texture == null) continue;
                     Material m;
                     if (!materials.TryGetValue(sub.Material, out m)) m = new Material();
                     int layer, hatch = style == 12 ? HatchingTechnique(fighter, m.Shader) : 0;
@@ -549,7 +553,7 @@ namespace ExMoreStuff
                     int nml = layers.TryGetValue(sub.Material, out layer) ? layer - textures.Count : -1;
                     var draw = new Draw
                     {
-                        Part = parts[i], Triangles = sub.Triangles, Texture = textures[sub.Texture], Material = m, Look = hatch != 0 ? new Look() : SpecialMaterial(fighter, m.Shader, m),
+                        Part = parts[i], Triangles = sub.Triangles, Texture = texture, Material = m, Look = hatch != 0 ? new Look() : SpecialMaterial(fighter, m.Shader, m),
                         Hatch = hatch, Brush = dark ? Brush11(fighter) : m.Brush, RimColor = dark ? Rim11 : Rim,
                         Blend = m.Blend, Cut = m.Blend ? Math.Max(m.Cut, 0.02) : m.Cut,
                         // EmMaterial::applyRenderStates 0x6ce380: back faces culled unless BackFace or TwoSidedRender
@@ -1139,9 +1143,11 @@ namespace ExMoreStuff
             readonly List<Texture> normals;
             readonly Dictionary<string, int> layers;
 
-            public Costume(string game, string stem, Func<string, byte[]> read)
+            readonly bool gimmicks;   // the fight-worn gimmick parts drawn (CostumePose.WearsGimmicks; the player's answer)
+
+            public Costume(string game, string stem, Func<string, byte[]> read, bool gimmicks = true)
             {
-                this.game = game; this.stem = stem; this.read = read;
+                this.game = game; this.stem = stem; this.read = read; this.gimmicks = gimmicks;
                 fighter = stem.Substring(0, 3).ToUpperInvariant();
                 byte[] emo = read(stem + ".obj.emo");
                 if (emo == null) throw new FileNotFoundException(stem + ".obj.emo is missing");
@@ -1163,9 +1169,9 @@ namespace ExMoreStuff
             {
                 byte[] emo = read(stem + ".obj.emo");
                 string ema = CostumePose.GameFile(game, fighter, fighter + ".obj.ema");
-                try { parts = ema != null ? CostumePose.Posed(emo, File.ReadAllBytes(ema), read(stem + ".bsr"), fighter, animation, frame, mirror) : CostumePose.ReadEmo(emo, fighter); }
+                try { parts = ema != null ? CostumePose.Posed(emo, File.ReadAllBytes(ema), read(stem + ".bsr"), fighter, animation, frame, mirror, gimmicks) : CostumePose.ReadEmo(emo, fighter, gimmicks); }
                 // ponytail: the stance failed; the model as it's made. A damaged skeleton isn't drawn at all (its error)
-                catch (Exception ex) when (!(ex is CostumePose.Damaged)) { parts = CostumePose.ReadEmo(emo, fighter); }
+                catch (Exception ex) when (!(ex is CostumePose.Damaged)) { parts = CostumePose.ReadEmo(emo, fighter, gimmicks); }
             }
 
             /// <summary>Color 1-12 as the training stage lights it, `width` x `height`, transparent around the fighter, turned

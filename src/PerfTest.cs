@@ -377,12 +377,12 @@ namespace ExMoreStuff
         /// place from there; the unpacked files go after. useGame(why it couldn't be drawn): asked before the game runs
         /// instead (false: OperationCanceledException); null runs it without asking.</summary>
         public static SortedDictionary<int, Bitmap> ColorPictures(string game, Item item, IList<int> colors, Action<string> say, bool fullSize = false, string docked = null,
-                                                                  Func<string, bool> useGame = null)
+                                                                  Func<string, bool> useGame = null, bool gimmicks = true)
         {
             colors = colors ?? Enumerable.Range(1, ColorCount).ToList();
             string why;
             var drawn = Drawn(game, item.Fighter + "_" + item.Slot.ToString("D2"), () => docked != null ? ZipCostume(docked, item) : Read(CostumeSwaps.CostumeFiles(game, item.Fighter, item.Slot)),
-                              colors.Where(c => c >= 1 && c <= ColorCount).Distinct().OrderBy(c => c).ToList(), say, fullSize, out why);
+                              colors.Where(c => c >= 1 && c <= ColorCount).Distinct().OrderBy(c => c).ToList(), say, fullSize, out why, gimmicks);
             if (drawn != null) return drawn;
             string blocked = Blocked();
             if (blocked != null) throw new InvalidOperationException(blocked);
@@ -428,14 +428,15 @@ namespace ExMoreStuff
         // costume packs"): the costume in the stance as SF4 Ember's gallery pictures are made, lit like the training stage,
         // a second or two a color and nothing to start. files: the costume's, by what follows its prefix. Null when it
         // can't be drawn (the reason said, and in `why`): the game makes the pictures then.
-        static SortedDictionary<int, Bitmap> Drawn(string game, string stem, Func<Dictionary<string, byte[]>> files, IList<int> colors, Action<string> say, bool fullSize, out string why)
+        static SortedDictionary<int, Bitmap> Drawn(string game, string stem, Func<Dictionary<string, byte[]>> files, IList<int> colors, Action<string> say, bool fullSize, out string why,
+                                                    bool gimmicks = true)
         {
             why = null;
             var pictures = new SortedDictionary<int, Bitmap>();
             try
             {
                 var have = files();
-                var costume = new CostumeRender.Costume(game, stem, name => { byte[] b; return have.TryGetValue(name.Substring(stem.Length), out b) ? b : null; });
+                var costume = new CostumeRender.Costume(game, stem, name => { byte[] b; return have.TryGetValue(name.Substring(stem.Length), out b) ? b : null; }, gimmicks);
                 int done = 0;
                 foreach (int color in colors)
                 {

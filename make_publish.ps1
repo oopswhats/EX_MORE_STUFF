@@ -7,8 +7,9 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $program = Get-Content "$root\src\Program.cs" -Raw
 if ($program -match "OWNER/REPO") { throw "src\Program.cs still has the placeholder catalog address" }
-$version = [regex]::Match((Get-Content "$root\src\AssemblyInfo.cs" -Raw), 'AssemblyVersion\("(\d+)\.(\d+)').Groups | Select-Object -Skip 1 | ForEach-Object Value
-$version = $version -join "."
+$parts = [regex]::Match((Get-Content "$root\src\AssemblyInfo.cs" -Raw), 'AssemblyVersion\("(\d+)\.(\d+)\.(\d+)').Groups | Select-Object -Skip 1 | ForEach-Object Value
+$version = $parts[0] + "." + $parts[1]
+if ([int]$parts[2] -gt 0) { $version += "." + $parts[2] }   # a fix release: 0.98.1 (Catalog builds its download address the same way)
 
 & "$root\build.bat"
 if ($LASTEXITCODE -ne 0) { throw "the build failed" }

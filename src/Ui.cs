@@ -1510,7 +1510,8 @@ namespace ExMoreStuff
         {
             this.wordmark = wordmark;
             System.Version v;
-            this.version = System.Version.TryParse(version, out v) ? v.Major + "." + v.Minor : version;
+            // 0.98, or 0.98.1 for a fix release (user 2026-10-23)
+            this.version = System.Version.TryParse(version, out v) ? v.Major + "." + v.Minor + (v.Build > 0 ? "." + v.Build : "") : version;
             Size = new Size(430, 292 + Notice);   // (+24: the thanks line, user 2026-10-23)
             var support = new FlatButton("Support") { Fill = KoFi, Font = Theme.Bold(12f), Location = new Point(Inset, 96) };
             support.Size = new Size(TextRenderer.MeasureText(support.Text, support.Font).Width + 40, 40);

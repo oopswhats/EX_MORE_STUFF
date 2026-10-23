@@ -30,11 +30,16 @@ namespace ExMoreStuff
             internal List<int[]> Nodes = new List<int[]>();   // per submesh: skeleton node indices
         }
 
-        // GIM parts that are what a character wears in a fight (most are intro or win props)
+        // GIM parts that are what a character wears in a fight (most are intro or win props, never drawn). Some skins leave
+        // the stock ones under their own (user 2026-10-23: Ghoul Yang's sneakers over its boots), so the player is asked
         static readonly Dictionary<string, string[]> KeepGim = new Dictionary<string, string[]>
         {
             { "YAN", new[] { "GIM4" } }, { "ROS", new[] { "GIM4" } }, { "BLR", new[] { "GIM4", "GIM5" } },
         };
+
+        /// <summary>Whether the fighter wears gimmick parts in a fight (the player is asked whether to draw them).</summary>
+        public static bool WearsGimmicks(string fighter) { return KeepGim.ContainsKey(fighter); }
+
         const double LooseDistance = 0.15, ClothLooseDistance = 0.4;
         const int BsrSteps = 240;
         const double BsrDt = 1.0 / 60.0;
@@ -970,7 +975,7 @@ namespace ExMoreStuff
         // ---------- the mesh ----------
 
         /// <summary>The parts of an .obj.emo (GIM props left out but for the ones a fighter wears in a fight).</summary>
-        public static List<Part> ReadEmo(byte[] d, string fighter)
+        public static List<Part> ReadEmo(byte[] d, string fighter, bool gimmicks = true)
         {
             if (Encoding.ASCII.GetString(d, 0, 4) != "#EMO") throw new InvalidOperationException("not an #EMO model");
             string[] keep;
@@ -980,7 +985,7 @@ namespace ExMoreStuff
             for (int i = 0; i < count; i++)
             {
                 string partName = CString(d, 0x20 + I32(d, 0x20 + namesAt + i * 4)).ToUpperInvariant();
-                if (partName.StartsWith("GIM") && !keep.Contains(partName)) continue;   // intro and win props
+                if (partName.StartsWith("GIM") && !(gimmicks && keep.Contains(partName))) continue;   // intro and win props
                 int h = 0x20 + I32(d, 0x28 + i * 4) + 0x20;
                 int texCount = I32(d, h + 4), texList = I32(d, h + 12), vCount = U16(d, h + 16), vSize = U16(d, h + 18), vOff = I32(d, h + 20);
                 int strip = U16(d, h + 24), subCount = U16(d, h + 26), subList = I32(d, h + 28);
@@ -1082,7 +1087,8 @@ namespace ExMoreStuff
         /// <summary>The model's parts in frame `frame` of animation `animation` of the fighter's .obj.ema (0: the fighting
         /// stance), mirrored (`mirror`: 1P, as character select; else 2P), cloth settled (`bsr`, may be null); stray
         /// accessories left out of the triangles.</summary>
-        public static List<Part> Posed(byte[] emoData, byte[] emaData, byte[] bsr, string fighter, int animation = 0, double frame = 0, bool mirror = true)
+        public static List<Part> Posed(byte[] emoData, byte[] emaData, byte[] bsr, string fighter, int animation = 0, double frame = 0, bool mirror = true,
+                                       bool gimmicks = true)
         {
             var emo = new EmoSkeleton(emoData);
             var byPosition = MirrorByPosition(emo.Bind);
@@ -1098,7 +1104,7 @@ namespace ExMoreStuff
             var bsrParts = ReadBsr(bsr);
             var matrices = SimulateBsr(WithInherited(driven, emo), emo, bsrParts);
             var simulated = new HashSet<string>(bsrParts.SelectMany(b => b.Particles.Keys));
-            var parts = ReadEmo(emoData, fighter);
+            var parts = ReadEmo(emoData, fighter, gimmicks);
 
             // the body (no physics bones) for telling stray accessories
             var body = new List<double[]>();

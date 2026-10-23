@@ -19,6 +19,7 @@ namespace ExMoreStuff
         bool looping;
         long startFrame;                                     // frame the playback began at (for Position)
         readonly object sync = new object();
+        readonly object deviceLock = new object();           // Position vs a playback closing its device
 
         public bool Playing { get { return thread != null && thread.IsAlive; } }
 
@@ -27,9 +28,15 @@ namespace ExMoreStuff
         {
             get
             {
-                if (!Playing || device == IntPtr.Zero) return -1;
+                if (!Playing) return -1;
                 var t = new MMTIME { wType = 2 };             // TIME_SAMPLES
-                if (waveOutGetPosition(device, ref t, Marshal.SizeOf(typeof(MMTIME))) != 0) return -1;
+                // asked only while the device is open: a playback ending closes it under the same lock (2026-10-23: asking a
+                // device that had just closed crashed EX More Stuff when a song ended during the open-song dialog)
+                lock (deviceLock)
+                {
+                    if (device == IntPtr.Zero) return -1;
+                    if (waveOutGetPosition(device, ref t, Marshal.SizeOf(typeof(MMTIME))) != 0) return -1;
+                }
                 long played = t.u;
                 lock (sync) return Map(played);
             }
@@ -116,10 +123,13 @@ namespace ExMoreStuff
             {
                 if (device != IntPtr.Zero)
                 {
-                    waveOutReset(device);
-                    for (int i = 0; i < Buffers; i++) if (headers[i] != IntPtr.Zero) waveOutUnprepareHeader(device, headers[i], hsize);
-                    waveOutClose(device);
-                    if (this.device == device) this.device = IntPtr.Zero;
+                    lock (deviceLock)
+                    {
+                        if (this.device == device) this.device = IntPtr.Zero;
+                        waveOutReset(device);
+                        for (int i = 0; i < Buffers; i++) if (headers[i] != IntPtr.Zero) waveOutUnprepareHeader(device, headers[i], hsize);
+                        waveOutClose(device);
+                    }
                 }
                 for (int i = 0; i < Buffers; i++)
                 {

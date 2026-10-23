@@ -231,12 +231,13 @@ namespace ExMoreStuff
             string which = colors.Count == PerfTest.ColorCount ? "each color" : colors.Count == 1 ? "color " + colors[0] : "colors " + string.Join(", ", colors);
             if (MessageBox.Show(FindForm(), "EX More Stuff draws " + name + " standing in " + which + ", a second or two each. " + (colors.Count == 1 ? "It goes" : "They go") + " into its package for rollback games' character select.", "EX More Stuff",   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                     MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+            bool gimmicks = Gimmicks(record);
             SortedDictionary<int, Bitmap> made = null;
             bool stopped = false;
             SetWorking(true);
             try
             {
-                made = await Task.Run(() => PerfTest.ColorPictures(g, record.Item, colors, text => BeginInvoke((Action)(() => Say(text))), false, DockedZip(record), UseGame(name, colors.Count)));
+                made = await Task.Run(() => PerfTest.ColorPictures(g, record.Item, colors, text => BeginInvoke((Action)(() => Say(text))), false, DockedZip(record), UseGame(name, colors.Count), gimmicks));
                 Say("Putting the pictures into " + name + "'s package...");
                 await Task.Run(() => PerfTest.PutPictures(g, record.Item, record, made));
             }
@@ -257,6 +258,18 @@ namespace ExMoreStuff
             using (var preview = new PicturePreview(name + ": color pictures", made)) preview.ShowDialog(FindForm());
             // then its character's folder in Mods, its zip picked (user 2026-10-12): ready to share
             try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + record.Package + "\""); } catch (Exception) { }
+        }
+
+        // Whether the drawing has the fighter's fight-worn gimmick parts (Yang, Rose, Blanka; CostumePose.WearsGimmicks),
+        // asked, Yes first (user 2026-10-23: "give the user the question, render gimmicks?", "default to yes"): most
+        // costumes wear them, some put their own over the stock ones (Ghoul Yang's boots over Yang's sneakers)
+        bool Gimmicks(Installed record)
+        {
+            string fighter = record.Item.Fighter;
+            if (!CostumePose.WearsGimmicks(fighter)) return true;
+            return MessageBox.Show(FindForm(), "Draw " + Fighters.Name(fighter) + "'s gimmick parts?\n\nYes for most costumes: they're part of what " +
+                Fighters.Name(fighter) + " wears in a fight. No when this costume has its own in their place, so the stock ones don't show over them.",
+                "EX More Stuff", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1) == DialogResult.Yes;
         }
 
         // Asked once more before the game makes the pictures of a costume that couldn't be drawn (its confirm said "a
@@ -337,10 +350,11 @@ namespace ExMoreStuff
             if (blocked != null) { Say("Can't make it now: " + blocked, true); return; }
             string name = Weight.Name(record), g = game, problem = null;
             string file = Path.Combine(Path.GetDirectoryName(record.Package), Path.GetFileNameWithoutExtension(record.Package) + " - color " + color + ".png");
+            bool gimmicks = Gimmicks(record);
             SetWorking(true);
             try
             {
-                var made = await Task.Run(() => PerfTest.ColorPictures(g, record.Item, new[] { color }, text => BeginInvoke((Action)(() => Say(text))), true, DockedZip(record)));
+                var made = await Task.Run(() => PerfTest.ColorPictures(g, record.Item, new[] { color }, text => BeginInvoke((Action)(() => Say(text))), true, DockedZip(record), null, gimmicks));
                 using (Bitmap picture = made[color]) picture.Save(file, System.Drawing.Imaging.ImageFormat.Png);
             }
             catch (Exception ex) { problem = ex.Message; }
