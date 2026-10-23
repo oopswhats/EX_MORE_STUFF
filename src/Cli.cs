@@ -16,10 +16,13 @@ namespace ExMoreStuff
     //   --color-pictures "<docked zip>" [1,2,5-10]   color pictures into the zip (drawn by EX More Stuff; the game runs
     //                                        only for a costume that can't be drawn; refused while it's open)
     //   --check-costumes [<folder or zip> ...] [--report "<file.txt>"]   the costume check (CostumeCheck): what breaks in
-    //                                        the game or desyncs online; default the costumes in the game's patch_ae2_tu3
-    //                                        and in Mods. The report, a text file to look into, with --report
-    //   --fix-costume "<folder or zip>"      a fixed copy beside it ("... - fixed"): locators set to the stand-in's,
-    //                                        materials put right, missing parts from the game; then checked again
+    //                                        the game or desyncs online; default the installed costumes, as the window's
+    //                                        Check installed costumes (patch_ae2_tu3 but the game's own 01-07, and the
+    //                                        docked ones). The report, a text file to look into, with --report
+    //   --fix-costume "<folder or zip>" ["<copy>"]   a fixed copy at <copy> (a folder, or a zip when it ends .zip), else
+    //                                        beside it ("... - fixed"; refused when that's in the game's folder): locators
+    //                                        set to the stand-in's, materials put right, missing parts from the game;
+    //                                        then checked again. Never over the costume itself or into the game's folder
     // and before the command:
     //   --data "<folder>"    EX More Stuff's own files (docked list, GameBanana list, built zips) there, not beside the
     //                        program, so these runs don't show in the player's EX More Stuff
@@ -75,7 +78,10 @@ namespace ExMoreStuff
                         ColorPictures(NeedGame(game), rest[0], rest.Count > 1 ? rest[1] : null, say, answer);
                         break;
                     case "--check-costumes": CheckCostumes(NeedGame(game), rest, reportFile, answer); break;
-                    case "--fix-costume": Need(rest, 1, "--fix-costume \"<folder or zip>\""); FixCostume(NeedGame(game), rest[0], reportFile, answer); break;
+                    case "--fix-costume":
+                        Need(rest, 1, "--fix-costume \"<folder or zip>\" [\"<fixed copy's folder or .zip>\"]");
+                        FixCostume(NeedGame(game), rest[0], rest.Count > 1 ? rest[1] : null, reportFile, answer);
+                        break;
                     default: throw new Usage("unknown command " + command);
                 }
                 answer.Insert(0, "ok");
@@ -134,19 +140,26 @@ namespace ExMoreStuff
         // the costume check: a line per costume (name=verdict), the report written with --report
         static void CheckCostumes(string game, List<string> paths, string reportFile, List<string> answer)
         {
-            if (paths.Count == 0) paths = new List<string> { Path.Combine(Game.PatchFolder(game), "battle", "chara"), AppFolders.Mods };
-            var results = paths.Where(p => File.Exists(p) || Directory.Exists(p)).SelectMany(CostumeCheck.Find).SelectMany(s => CostumeCheck.Check(game, s)).ToList();
+            var sources = paths.Count == 0 ? CostumeCheck.Installed(game) : paths.Where(p => File.Exists(p) || Directory.Exists(p)).SelectMany(CostumeCheck.Find).ToList();
+            var results = sources.SelectMany(s => CostumeCheck.Check(game, s)).ToList();
             foreach (var r in results) answer.Add(r.Name + "=" + r.Verdict.ToString().ToUpperInvariant() + " " + r.Where);
             answer.Add("faulty=" + results.Count(r => r.Verdict == CostumeCheck.Verdict.Faulty));
             if (reportFile != null) { File.WriteAllText(reportFile, CostumeCheck.Report(game, results)); answer.Add("report=" + Path.GetFullPath(reportFile)); }
         }
 
-        static void FixCostume(string game, string path, string reportFile, List<string> answer)
+        // the fixed copy where it's asked for, or beside the costume; never over it or into the game's folder
+        static void FixCostume(string game, string path, string target, string reportFile, List<string> answer)
         {
             var sources = CostumeCheck.Find(Path.GetFullPath(path));
             if (sources.Count != 1) throw new InvalidOperationException(sources.Count == 0 ? "no costume (CHR_NN.obj.emo) at " + path : "more than one folder or zip at " + path + ": give one");
+            if (target == null)
+            {
+                target = CostumeCheck.DefaultTarget(sources[0].Where);
+                if (CostumeCheck.InGame(game, target))
+                    throw new InvalidOperationException("the fixed copy would go into the game's folder (" + target + "): give where it goes, --fix-costume \"<folder or zip>\" \"<fixed copy's folder or .zip>\"");
+            }
             var done = new List<string>();
-            string fixedCopy = CostumeCheck.Fix(game, sources[0], done);
+            string fixedCopy = CostumeCheck.Fix(game, sources[0], done, target);
             foreach (string d in done) answer.Add("done=" + d);
             answer.Add("fixed=" + fixedCopy);
             var results = CostumeCheck.Find(fixedCopy).SelectMany(s => CostumeCheck.Check(game, s)).ToList();
@@ -191,7 +204,8 @@ namespace ExMoreStuff
             Package(answer, DockedRecord(r.Package));
         }
 
-        // the docked card's Color pictures: the game runs once a color, the pictures into the zip
+        // the docked card's Color pictures: drawn (the game runs once a color only for a costume that can't be), the
+        // pictures into the zip; colors 1-10 (a package holds no 11 or 12)
         static void ColorPictures(string game, string zip, string which, Action<string> say, List<string> answer)
         {
             Installed r = DockedRecord(zip);
@@ -206,7 +220,7 @@ namespace ExMoreStuff
             answer.Add("pictures=" + string.Join(",", made.Keys));
         }
 
-        // "1,2,5-10" (none: all twelve)
+        // "1,2,5-10" (none: all ten)
         static List<int> Colors(string which)
         {
             if (string.IsNullOrWhiteSpace(which)) return Enumerable.Range(1, PerfTest.ColorCount).ToList();

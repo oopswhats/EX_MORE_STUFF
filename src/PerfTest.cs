@@ -366,21 +366,27 @@ namespace ExMoreStuff
         // saves the layer the game draws the fighters on (no stage, no life bars: transparent around them) 60 frames
         // in. P1 is the costume's fighter wearing it (in the Original's place), P2 Ryu (Ken beside Ryu), cut away.
         const string TrainingMode = "patch=26B00:02>03\r\n";
-        public const int ColorCount = 12;   // 11 and 12: color 1 in the game's two styles
+        // A package's colors: 01-10 (Installer.AllowedNames takes no <prefix>_11.png or _12.png). The game's two styles of
+        // color 1 are View...'s only (CostumeRender.Colors).
+        public const int ColorCount = 10;
         public const int PictureWidth = 256, PictureHeight = 384;   // as the pattern pictures (ColorVariants), for Ember's gallery
 
-        /// <summary>An installed custom costume in the colors asked for (1-12; all when null), drawn (Drawn) or, when it can't
+        /// <summary>An installed custom costume in the colors asked for (1-10; all when null), drawn (Drawn) or, when it can't
         /// be, P1 standing idle as the game draws it, cut out (off the window's thread: about 7 seconds of game a color). `say` says which color. A docked
         /// file (`docked`, its zip: not in the game) is unpacked beside the program for the runs and in Ryu's Original's
-        /// place from there; the unpacked files go after.</summary>
-        public static SortedDictionary<int, Bitmap> ColorPictures(string game, Item item, IList<int> colors, Action<string> say, bool fullSize = false, string docked = null)
+        /// place from there; the unpacked files go after. useGame(why it couldn't be drawn): asked before the game runs
+        /// instead (false: OperationCanceledException); null runs it without asking.</summary>
+        public static SortedDictionary<int, Bitmap> ColorPictures(string game, Item item, IList<int> colors, Action<string> say, bool fullSize = false, string docked = null,
+                                                                  Func<string, bool> useGame = null)
         {
             colors = colors ?? Enumerable.Range(1, ColorCount).ToList();
+            string why;
             var drawn = Drawn(game, item.Fighter + "_" + item.Slot.ToString("D2"), () => docked != null ? ZipCostume(docked, item) : Read(CostumeSwaps.CostumeFiles(game, item.Fighter, item.Slot)),
-                              colors.Where(c => c >= 1 && c <= ColorCount).Distinct().OrderBy(c => c).ToList(), say, fullSize);
+                              colors.Where(c => c >= 1 && c <= ColorCount).Distinct().OrderBy(c => c).ToList(), say, fullSize, out why);
             if (drawn != null) return drawn;
             string blocked = Blocked();
             if (blocked != null) throw new InvalidOperationException(blocked);
+            if (useGame != null && !useGame(why)) throw new OperationCanceledException();
             string fighter = item.Fighter;
             int id = Array.IndexOf(Fighters.Codes, fighter), other = id == 0 ? 1 : 0;
             var pictures = new SortedDictionary<int, Bitmap>();
@@ -421,9 +427,10 @@ namespace ExMoreStuff
         // Color pictures drawn without the game (CostumeRender; user 2026-10-23: "automate the screenshots/images inside the
         // costume packs"): the costume in the stance as SF4 Ember's gallery pictures are made, lit like the training stage,
         // a second or two a color and nothing to start. files: the costume's, by what follows its prefix. Null when it
-        // can't be drawn (the reason said): the game makes the pictures then.
-        static SortedDictionary<int, Bitmap> Drawn(string game, string stem, Func<Dictionary<string, byte[]>> files, IList<int> colors, Action<string> say, bool fullSize)
+        // can't be drawn (the reason said, and in `why`): the game makes the pictures then.
+        static SortedDictionary<int, Bitmap> Drawn(string game, string stem, Func<Dictionary<string, byte[]>> files, IList<int> colors, Action<string> say, bool fullSize, out string why)
         {
+            why = null;
             var pictures = new SortedDictionary<int, Bitmap>();
             try
             {
@@ -445,6 +452,7 @@ namespace ExMoreStuff
             catch (Exception ex)
             {
                 foreach (Bitmap p in pictures.Values) p.Dispose();
+                why = ex.Message;
                 say("It couldn't be drawn (" + ex.Message + "); the game makes the pictures instead.");
                 return null;
             }
@@ -458,9 +466,17 @@ namespace ExMoreStuff
             return new CostumeRender.Costume(game, stem, name => { byte[] b; return have.TryGetValue(name.Substring(stem.Length), out b) ? b : null; });
         }
 
-        /// <summary>Color packs drawn: each the costume's files with the pack's as color 1. Null when one can't be.</summary>
+        /// <summary>Color packs drawn: each the costume's files with the pack's as color 1. Null when one can't be (why: the
+        /// reason).</summary>
         internal static SortedDictionary<int, Bitmap> DrawnPacks(string game, IList<Installed> packs, Action<string> say, bool fullSize)
         {
+            string why;
+            return DrawnPacks(game, packs, say, fullSize, out why);
+        }
+
+        static SortedDictionary<int, Bitmap> DrawnPacks(string game, IList<Installed> packs, Action<string> say, bool fullSize, out string why)
+        {
+            why = null;
             var drawn = new SortedDictionary<int, Bitmap>();
             foreach (Installed pack in packs)
             {
@@ -470,7 +486,7 @@ namespace ExMoreStuff
                     var files = Read(CostumeSwaps.CostumeFiles(game, item.Fighter, item.Slot));
                     foreach (var part in UnpackColor(pack.Package, item)) files["_01" + part.Key] = part.Value;
                     return files;
-                }, new[] { 1 }, text => say(text.Replace("Color 1", "Color " + item.Color)), fullSize);
+                }, new[] { 1 }, text => say(text.Replace("Color 1", "Color " + item.Color)), fullSize, out why);
                 if (one == null) { foreach (Bitmap p in drawn.Values) p.Dispose(); return null; }
                 drawn[item.Color] = one[1];
             }
@@ -514,12 +530,14 @@ namespace ExMoreStuff
         // can't be picked in the benchmark's fight, so for each its costume's files (as the game has them) play as P1's
         // Original with the pack's texture as color 1, and color 1 is pictured as ColorPictures does. A run of the game
         // each; Begin and Recover around each put the Original (and a swap of the player's) back.
-        public static SortedDictionary<int, Bitmap> PackPictures(string game, IList<Installed> packs, Action<string> say, bool fullSize = false)
+        public static SortedDictionary<int, Bitmap> PackPictures(string game, IList<Installed> packs, Action<string> say, bool fullSize = false, Func<string, bool> useGame = null)
         {
-            var drawn = DrawnPacks(game, packs, say, fullSize);
+            string why;
+            var drawn = DrawnPacks(game, packs, say, fullSize, out why);
             if (drawn != null) return drawn;
             string blocked = Blocked();
             if (blocked != null) throw new InvalidOperationException(blocked);
+            if (useGame != null && !useGame(why)) throw new OperationCanceledException();   // as ColorPictures
             var pictures = new SortedDictionary<int, Bitmap>();
             string unpacked = AppFolders.DataFile("color_pack"), shot = AppFolders.DataFile("color_picture.png");
             try
@@ -594,6 +612,8 @@ namespace ExMoreStuff
         /// card) replaced, then the package into the game again (a docked file: not).</summary>
         public static void PutPackPictures(string game, IList<Installed> packs, IDictionary<int, Bitmap> made)
         {
+            // an installed one goes into the game again after: nothing is changed while the game is open
+            if (packs.Any(p => p.Source != Docked.Source) && Game.IsRunning()) throw new InvalidOperationException("close the game first");
             foreach (Installed pack in packs)
             {
                 Bitmap picture;
@@ -765,10 +785,13 @@ namespace ExMoreStuff
         /// stays out of the game).</summary>
         public static void PutPictures(string game, Item item, Installed record, IDictionary<int, Bitmap> made)
         {
+            // an installed one goes into the game again after: nothing is changed while the game is open
+            if (record.Source != Docked.Source && Game.IsRunning()) throw new InvalidOperationException("close the game first");
             SafeFile.EditZip(record.Package, zip =>   // on a copy, swapped in when done
             {
                 foreach (var picture in made)
                 {
+                    if (!(picture.Key >= 1 && picture.Key <= ColorCount || picture.Key >= 30 && picture.Key <= 99)) continue;   // nothing else can be in a package (Installer.AllowedNames)
                     string entry = item.Prefix + "_" + picture.Key.ToString("D2") + ".png";
                     foreach (var old in zip.Entries.Where(e => string.Equals(e.Name, entry, StringComparison.OrdinalIgnoreCase)).ToList()) old.Delete();
                     using (Stream s = zip.CreateEntry(entry).Open()) picture.Value.Save(s, ImageFormat.Png);

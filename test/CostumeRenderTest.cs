@@ -4,8 +4,10 @@
 //   animations <game> <CHR>   the fighter's animations: name and frame count
 //   viewer <game> <folder> <CHR_NN> <out prefix>   the View... window off screen: <prefix>-1.png as it opens, <prefix>-2.png
 //        after color 12, crouch frame 10, turned 180, 2P (set as its controls would)
-//   draw <game> <folder> <CHR_NN> <color> <out.png> [<python picture.png>]   a picture (600 x 800), and how far it is
-//        from the Python renderer's: mean and 99th percentile of the per-pixel difference (0-255), coverage
+//   draw <game> <folder> <CHR_NN> <color> <out.png> [<python picture.png>] [quick]   a picture (600 x 800; quick: the
+//        viewer's quick look, 300 x 400), its time and peak memory, and how far it is from the Python renderer's (or
+//        any other picture's): mean and 99th percentile of the per-pixel difference (0-255), coverage
+//   damaged <game> <folder> <CHR_NN>   the costume with its skeleton made to loop: an error, not a stack overflow
 //   pack <game> <work folder>   a color pack (Ryu's costume 1, color 31 made of the game's color 5) drawn as the
 //        Costume creation page does, without the game
 // Build: csc -target:exe -main:ExMoreStuff.CostumeRenderTest (the references of build.bat) test\CostumeRenderTest.cs src\*.cs
@@ -25,7 +27,8 @@ namespace ExMoreStuff
             if (args[0] == "animations") { foreach (var a in CostumePose.Animations(File.ReadAllBytes(CostumePose.GameFile(args[1], args[2], args[2] + ".obj.ema")))) Console.WriteLine(a.Key + " " + a.Value); return 0; }
             if (args[0] == "pack") return Pack(args[1], args[2]);
             if (args[0] == "viewer") return Viewer(args[1], args[2], args[3], args[4]);
-            if (args[0] == "draw") return Draw(args[1], args[2], args[3], int.Parse(args[4]), args[5], args.Length > 6 ? args[6] : null);
+            if (args[0] == "draw") return Draw(args[1], args[2], args[3], int.Parse(args[4]), args[5], args.Length > 6 && args[6] != "quick" ? args[6] : null, args.Contains("quick"));
+            if (args[0] == "damaged") return Damaged(args[1], args[2], args[3]);
             Console.WriteLine("unknown mode");
             return 2;
         }
@@ -43,7 +46,8 @@ namespace ExMoreStuff
             timer.Tick += (s, e) =>
             {
                 if (info.Text.StartsWith("It ")) { Console.WriteLine("FAIL  " + info.Text); timer.Stop(); viewer.Close(); return; }
-                if (!info.Text.Contains("drawn in") || (bool)field("busy")) return;
+                // the full picture (a quick look says no time), nothing more waiting to be drawn
+                if (!info.Text.Contains("drawn in") || (bool)field("busy") || field("pending") != null || ((System.Windows.Forms.Timer)field("settle")).Enabled) return;
                 using (var shot = new System.Drawing.Bitmap(viewer.Width, viewer.Height))
                 {
                     viewer.DrawToBitmap(shot, new System.Drawing.Rectangle(0, 0, viewer.Width, viewer.Height));
@@ -78,14 +82,36 @@ namespace ExMoreStuff
             return made[31].Width == PerfTest.PictureWidth && made[31].Height == PerfTest.PictureHeight ? 0 : 1;
         }
 
-        static int Draw(string game, string folder, string stem, int color, string output, string reference)
+        // a costume whose skeleton loops (a bone its own parent; two bones each other's) gives an error, not a stack overflow
+        static int Damaged(string game, string folder, string stem)
+        {
+            int code = 0;
+            byte[] good = File.ReadAllBytes(Path.Combine(folder, stem + ".obj.emo"));
+            int b = BitConverter.ToInt32(good, 16), start = BitConverter.ToInt32(good, b + 8);
+            foreach (var loop in new[] { new[] { 5, 5 }, new[] { 3, 7, 7, 3 } })
+            {
+                var emo = (byte[])good.Clone();
+                for (int i = 0; i < loop.Length; i += 2) BitConverter.GetBytes((ushort)loop[i + 1]).CopyTo(emo, b + start + loop[i] * 80);
+                try
+                {
+                    new CostumeRender.Costume(game, stem, name => name == stem + ".obj.emo" ? emo : File.Exists(Path.Combine(folder, name)) ? File.ReadAllBytes(Path.Combine(folder, name)) : null);
+                    Console.WriteLine("FAIL  a looping skeleton (" + string.Join(",", loop) + ") was drawn");
+                    code = 1;
+                }
+                catch (CostumePose.Damaged ex) { Console.WriteLine("ok    " + ex.Message); }
+            }
+            return code;
+        }
+
+        static int Draw(string game, string folder, string stem, int color, string output, string reference, bool quick)
         {
             var watch = System.Diagnostics.Stopwatch.StartNew();
             var costume = new CostumeRender.Costume(game, stem, name => File.Exists(Path.Combine(folder, name)) ? File.ReadAllBytes(Path.Combine(folder, name)) : null);
             long posed = watch.ElapsedMilliseconds;
-            using (var picture = costume.Draw(color))
+            using (var picture = quick ? costume.Draw(color, 300, 400, CostumeRender.YawDegrees, true) : costume.Draw(color))
             {
-                Console.WriteLine("posed in " + posed + " ms, drawn in " + (watch.ElapsedMilliseconds - posed) + " ms");
+                Console.WriteLine("posed in " + posed + " ms, drawn in " + (watch.ElapsedMilliseconds - posed) + " ms, peak memory " +
+                                  System.Diagnostics.Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024) + " MB");
                 picture.Save(output, System.Drawing.Imaging.ImageFormat.Png);
                 if (reference == null) return 0;
                 using (var theirs = new System.Drawing.Bitmap(reference))

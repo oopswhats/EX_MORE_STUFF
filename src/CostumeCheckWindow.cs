@@ -12,11 +12,13 @@ namespace ExMoreStuff
     // per costume that needs a fix, is worth a look or is fine (a filter each), what's wrong said plainly with the check's
     // own line under it, Fix a copy where something can be fixed (the copy goes where the player says; the costume stays
     // as it is) and the folder it's in. Save report... writes the whole check as text, to look into or send to its maker.
+    // Only the results are kept: Fix reads the costume's folder or zip again.
     class CostumeCheckWindow : Form
     {
         readonly string game;
         readonly List<CostumeCheck.Result> results;
-        readonly Dictionary<CostumeCheck.Result, CostumeCheck.Source> sources;
+        readonly List<FlatButton> fixButtons = new List<FlatButton>();
+        bool fixing;   // a fixed copy being made: one at a time, and the window stays until it's done
         readonly FlowLayoutPanel rows = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = Theme.Base, Padding = new Padding(20, 4, 20, 20) };
         readonly FlatButton faulty, look, fine;
         readonly Label status = new Label { AutoSize = false, Dock = DockStyle.Bottom, Height = 30, BackColor = Theme.Base, ForeColor = Theme.Muted, Font = Theme.Font(9.5f), Padding = new Padding(22, 4, 0, 0) };
@@ -37,11 +39,15 @@ namespace ExMoreStuff
             { "COLORS", "Colors are missing: rollback games only offer a costume with all ten." },   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
             { "SLOT", "Its costume number is outside 08-99: rollback games don't offer it." },
             { "STOCK", "The game's costumes 1-3 weren't found, so its bones weren't checked." },
+            { "BROKEN", "The model file is damaged: something in it points past its end. The game closes when it loads it." },
+            { "PALETTE", "Too many bones move one piece of the model (more than 24): the game closes when it loads it." },
+            { "SUBMESHES", "A part of the model is split into too many pieces (more than 31): the game closes when it loads it." },
+            { "UNREAD", "Its files couldn't be read, so it wasn't checked." },
         };
 
-        public CostumeCheckWindow(string game, string title, List<CostumeCheck.Result> results, Dictionary<CostumeCheck.Result, CostumeCheck.Source> sources)
+        public CostumeCheckWindow(string game, string title, List<CostumeCheck.Result> results)
         {
-            this.game = game; this.results = results; this.sources = sources;
+            this.game = game; this.results = results;
             Text = title;
             Font = Theme.Font(9f);
             BackColor = Theme.Base;
@@ -81,6 +87,7 @@ namespace ExMoreStuff
             faulty.Invalidate(); look.Invalidate(); fine.Invalidate();
             rows.SuspendLayout();
             foreach (Control c in rows.Controls.Cast<Control>().ToList()) c.Dispose();
+            fixButtons.Clear();
             var list = results.Where(r => Group(r) == group).OrderBy(r => r.Name).ToList();
             if (list.Count == 0)
                 rows.Controls.Add(new Label { Text = "None.", AutoSize = true, ForeColor = Theme.Muted, Font = Theme.Font(10f), Margin = new Padding(2, 12, 0, 0) });
@@ -90,6 +97,7 @@ namespace ExMoreStuff
 
         string Title(CostumeCheck.Result r)
         {
+            if (r.Name.Length != 6 || r.Name[3] != '_') return r.Name;   // a zip that couldn't be read
             string fighter = r.Name.Substring(0, 3);
             return (Fighters.IsCode(fighter) ? Fighters.Name(fighter) + " · " : "") + "costume " + r.Name.Substring(4);
         }
@@ -124,9 +132,10 @@ namespace ExMoreStuff
             int bx = width - buttons - 16, by = 14;
             if (r.Findings.Any(f => f.Fixable))
             {
-                var fix = new FlatButton("Fix a copy...", true) { Bounds = new Rectangle(bx, by, buttons, 36) };
-                fix.Click += async (s, e) => await Fix(r, fix);
+                var fix = new FlatButton("Fix a copy...", true) { Bounds = new Rectangle(bx, by, buttons, 36), Enabled = !fixing };
+                fix.Click += async (s, e) => await Fix(r);
                 row.Controls.Add(fix);
+                fixButtons.Add(fix);
                 by += 44;
             }
             var folder = new FlatButton("Show in folder") { Bounds = new Rectangle(bx, by, buttons, 36) };
@@ -138,9 +147,14 @@ namespace ExMoreStuff
             return row;
         }
 
-        // the costume's files fixed into a copy where the player says, checked again
-        async Task Fix(CostumeCheck.Result r, FlatButton button)
+        // the costume's files, read again, fixed into a copy where the player says (never over the costume or into the
+        // game's folder), checked again
+        async Task Fix(CostumeCheck.Result r)
         {
+            if (fixing) return;
+            CostumeCheck.Source source;
+            try { source = CostumeCheck.Only(CostumeCheck.Open(r.Where), r.Name); }
+            catch (Exception ex) { status.ForeColor = Theme.Warning; status.Text = r.Name + " couldn't be read again: " + ex.Message; return; }
             string target;
             using (var dialog = new SaveFileDialog { Filter = "Zip|*.zip", FileName = r.Name + " - fixed.zip", Title = "Where the fixed copy of " + r.Name + " goes",
                                                      InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) })
@@ -148,7 +162,14 @@ namespace ExMoreStuff
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 target = dialog.FileName;
             }
-            button.Enabled = false;
+            string why = CostumeCheck.TargetProblem(game, source, target);
+            if (why != null)
+            {
+                MessageBox.Show(this, "The fixed copy can't go there: " + why, "EX More Stuff", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            fixing = true;
+            foreach (FlatButton b in fixButtons) b.Enabled = false;
             status.ForeColor = Theme.Muted;
             status.Text = "Fixing " + r.Name + "...";
             var done = new List<string>();
@@ -156,7 +177,6 @@ namespace ExMoreStuff
             string problem = null;
             try
             {
-                var source = CostumeCheck.Only(sources[r], r.Name);
                 await Task.Run(() =>
                 {
                     CostumeCheck.Fix(game, source, done, target);
@@ -164,8 +184,9 @@ namespace ExMoreStuff
                 });
             }
             catch (Exception ex) { problem = ex.Message; }
+            finally { fixing = false; }
             if (IsDisposed) return;
-            button.Enabled = true;
+            foreach (FlatButton b in fixButtons) b.Enabled = true;
             if (problem != null) { status.ForeColor = Theme.Warning; status.Text = r.Name + " couldn't be fixed: " + problem; return; }
             var now = after.FirstOrDefault();
             string verdict = now == null ? "" : Group(now) == 0 ? ", but it still needs a fix: " + string.Join(", ", now.Findings.Select(f => f.Kind).Distinct()) : Group(now) == 1 ? ", now worth a look only" : ", now fine";
@@ -192,6 +213,13 @@ namespace ExMoreStuff
         }
 
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Theme.DarkTitleBar(Handle); }
+
+        // the window stays while a copy is made (the costume rows' Check waits behind it)
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (fixing && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; return; }
+            base.OnFormClosing(e);
+        }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keys)
         {

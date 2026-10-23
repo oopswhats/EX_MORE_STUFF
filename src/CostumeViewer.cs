@@ -13,10 +13,12 @@ namespace ExMoreStuff
     // Costume creation's View... draws it (CostumeRender) in any color, any frame of any of the fighter's animations, turned
     // and on either side, and saves the picture. Character select's look (the fighting stance, frame 0, 1P, turned 90
     // degrees) is where it starts. Drawing runs off the window's thread, one picture at a time; what was asked meanwhile is
-    // drawn after (only the last).
+    // drawn after (only the last). While a slider moves or the picture is dragged, a quick look (CostumeRender's quick:
+    // half size, one sample a pixel); the full picture once nothing has moved for Settle ms. Colors 11 and 12 (color 1 in
+    // the game's two styles) are here only: they are no package's (PerfTest.ColorCount).
     class CostumeViewer : Form
     {
-        const int DrawWidth = 600, DrawHeight = 800;
+        const int DrawWidth = 600, DrawHeight = 800, Settle = 250;
         readonly string game, stem, title;
         readonly Func<CostumeRender.Costume> open;
         CostumeRender.Costume costume;
@@ -24,7 +26,7 @@ namespace ExMoreStuff
 
         readonly PictureBox picture = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Theme.Well };
         readonly Label info = new Label { AutoSize = false, BackColor = Theme.Well, ForeColor = Theme.Muted, Font = Theme.Font(9f) };
-        readonly FlatButton[] colorButtons = new FlatButton[PerfTest.ColorCount];
+        readonly FlatButton[] colorButtons = new FlatButton[CostumeRender.Colors];
         readonly ComboBox stance = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Theme.Button, ForeColor = Theme.Text, Font = Theme.Font(10f) };
         readonly ValueSlider frame = new ValueSlider(), turn = new ValueSlider { Maximum = 359, Step = 5 };
         readonly Label frameText = Small(""), turnText = Small("");
@@ -32,7 +34,9 @@ namespace ExMoreStuff
         readonly FlatButton reset = new FlatButton("Back to character select's look"), save = new FlatButton("Save picture...", true), saveAll = new FlatButton("Save all 12 colors...");
 
         int color = 1;
-        bool mirror = true, busy, again, loading = true;
+        bool mirror = true, busy, saving, closed, loading = true;
+        bool? pending;   // asked while drawing: the full picture (true) or a quick look (false), drawn after
+        readonly Timer settle = new Timer { Interval = Settle };   // the full picture after a quick look
         string posed;   // the pose the costume has: animation, frame, side
         int dragX = -1, dragTurn;
 
@@ -82,20 +86,27 @@ namespace ExMoreStuff
                 TextRenderer.DrawText(e.Graphics, stance.Items[e.Index].ToString(), stance.Font, Rectangle.Inflate(e.Bounds, -6, 0), stance.Enabled ? Theme.Text : Theme.Muted,
                                       TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             };
-            stance.SelectedIndexChanged += (s, e) => { if (loading) return; frame.Maximum = Math.Max(0, Frames(stance.SelectedIndex) - 1); frame.Value = 0; Changed(); };
+            stance.SelectedIndexChanged += (s, e) =>
+            {
+                if (loading) return;
+                loading = true;   // the frame back to 0 with it: one full picture, no quick look first
+                frame.Maximum = Math.Max(0, Frames(stance.SelectedIndex) - 1); frame.Value = 0;
+                loading = false;
+                Changed();
+            };
             panel.Controls.Add(stance); y += 46;
             panel.Controls.Add(Small("Frame", x, y));
             frameText.Bounds = new Rectangle(x + w - 160, y, 160, 22); frameText.TextAlign = ContentAlignment.TopRight;
             panel.Controls.Add(frameText); y += 24;
             frame.Bounds = new Rectangle(x, y, w, 28);
-            frame.ValueChanged += Changed;
+            frame.ValueChanged += Moved;
             panel.Controls.Add(frame); y += 44;
             panel.Controls.Add(Small("Turn", x, y));
             turnText.Bounds = new Rectangle(x + w - 220, y, 220, 22); turnText.TextAlign = ContentAlignment.TopRight;
             panel.Controls.Add(turnText); y += 24;
             turn.Bounds = new Rectangle(x, y, w, 28);
             turn.Value = (int)CostumeRender.YawDegrees;
-            turn.ValueChanged += Changed;
+            turn.ValueChanged += Moved;
             panel.Controls.Add(turn); y += 44;
             panel.Controls.Add(Small("Side", x, y)); y += 24;
             side1.Bounds = new Rectangle(x, y, (w - 6) / 2, 40);
@@ -120,17 +131,18 @@ namespace ExMoreStuff
             {
                 loading = true;
                 if (stance.Items.Count > 0) stance.SelectedIndex = 0;
-                loading = false;
                 frame.Maximum = Math.Max(0, Frames(0) - 1);
                 frame.Value = 0; turn.Value = (int)CostumeRender.YawDegrees; mirror = true;
+                loading = false;
                 Changed();
             };
             save.Click += (s, e) => SavePicture();
             saveAll.Click += (s, e) => SaveAll();
+            settle.Tick += (s, e) => { settle.Stop(); Ask(true); };
 
             // dragging across the picture turns the fighter
             picture.Cursor = Cursors.SizeWE;
-            picture.MouseDown += (s, e) => { if (e.Button == MouseButtons.Left) { dragX = e.X; dragTurn = turn.Value; } };
+            picture.MouseDown += (s, e) => { if (e.Button == MouseButtons.Left && turn.Enabled) { dragX = e.X; dragTurn = turn.Value; } };
             picture.MouseUp += (s, e) => dragX = -1;
             picture.MouseMove += (s, e) => { if (dragX >= 0) turn.Value = ((dragTurn - (e.X - dragX) / 2) % 360 + 360) % 360; };
 
@@ -190,22 +202,41 @@ namespace ExMoreStuff
             turnText.Text = turn.Value + "°" + (turn.Value == (int)CostumeRender.YawDegrees ? " (as character select)" : "");
         }
 
+        // a button or the stance: the full picture
         void Changed()
         {
             Sync();
+            if (loading) return;
+            settle.Stop();
+            Ask(true);
+        }
+
+        // a slider moved (the turn slider by a drag on the picture too): a quick look, the full picture when it rests
+        void Moved()
+        {
+            Sync();
             if (loading || costume == null) return;
-            if (busy) { again = true; return; }
+            Ask(false);
+            settle.Stop();
+            settle.Start();
+        }
+
+        // one drawing at a time (and none while all colors are being saved): what's asked meanwhile waits, the last only
+        void Ask(bool full)
+        {
+            if (loading || costume == null || closed) return;
+            if (busy || saving) { pending = full; return; }
             busy = true;
             int c = color, yaw = turn.Value, animation = Math.Max(0, stance.SelectedIndex), f = frame.Value;
             bool m = mirror, repose = Pose() != posed;
             string pose = Pose();
             info.ForeColor = Theme.Muted;
-            info.Text = repose ? "Posing..." : "Drawing...";
+            if (full || repose) info.Text = repose ? "Posing..." : "Drawing...";
             var watch = System.Diagnostics.Stopwatch.StartNew();
             Task.Run(() =>
             {
                 if (repose) costume.Pose(animation, f, m);
-                return costume.Draw(c, DrawWidth, DrawHeight, yaw);
+                return full ? costume.Draw(c, DrawWidth, DrawHeight, yaw) : costume.Draw(c, DrawWidth / 2, DrawHeight / 2, yaw, true);
             }).ContinueWith(t =>
             {
                 if (IsDisposed) { if (t.Status == TaskStatus.RanToCompletion && t.Result != null) t.Result.Dispose(); return; }
@@ -216,7 +247,7 @@ namespace ExMoreStuff
                     Image old = picture.Image;
                     picture.Image = t.Result;
                     if (old != null) old.Dispose();
-                    info.Text = "Color " + c + ", drawn in " + (watch.ElapsedMilliseconds / 1000.0).ToString("0.0") + " s   ·   drag the picture to turn";
+                    info.Text = "Color " + c + (full ? ", drawn in " + (watch.ElapsedMilliseconds / 1000.0).ToString("0.0") + " s" : "") + "   ·   drag the picture to turn";
                 }
                 else
                 {
@@ -224,7 +255,7 @@ namespace ExMoreStuff
                     info.ForeColor = Theme.Warning;
                     info.Text = t.Exception != null ? "It couldn't be drawn: " + t.Exception.GetBaseException().Message : "Color " + c + " has no textures";
                 }
-                if (again) { again = false; Changed(); }
+                if (pending != null && !saving) { bool next = pending.Value; pending = null; Ask(next); }
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
@@ -251,28 +282,39 @@ namespace ExMoreStuff
                 folder = dialog.SelectedPath;
             }
             SetEnabled(false);
+            saving = true;
+            settle.Stop();
+            while (busy) { await Task.Delay(50); if (closed) return; }   // the picture being drawn first: one drawing at a time
             busy = true;
             int yaw = turn.Value, done = 0;
             string problem = null;
             try
             {
-                for (int c = 1; c <= PerfTest.ColorCount; c++)
+                for (int c = 1; c <= CostumeRender.Colors && !closed; c++)   // the window closed: no more
                 {
                     info.ForeColor = Theme.Muted;
-                    info.Text = "Saving color " + c + " of " + PerfTest.ColorCount + "...";
+                    info.Text = "Saving color " + c + " of " + CostumeRender.Colors + "...";
                     int cc = c;
                     using (Bitmap b = await Task.Run(() => costume.Draw(cc, DrawWidth, DrawHeight, yaw)))
-                        if (b != null) { b.Save(Path.Combine(folder, FileName(cc)), ImageFormat.Png); done++; }
+                        if (b != null && !closed) { b.Save(Path.Combine(folder, FileName(cc)), ImageFormat.Png); done++; }
                 }
             }
             catch (Exception ex) { problem = ex.Message; }
             busy = false;
-            if (IsDisposed) return;
+            saving = false;
+            if (closed || IsDisposed) return;
             SetEnabled(true);
             info.ForeColor = problem != null ? Theme.Warning : Theme.Muted;
             info.Text = problem != null ? "It stopped: " + problem : done + " pictures saved in " + folder;
             if (problem == null) try { System.Diagnostics.Process.Start("explorer.exe", "\"" + folder + "\""); } catch (Exception) { }
-            if (again) { again = false; Changed(); }
+            if (pending != null) { bool next = pending.Value; pending = null; Ask(next); }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            closed = true;   // a save of all colors stops; nothing more is drawn
+            settle.Stop();
+            base.OnFormClosed(e);
         }
 
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Theme.DarkTitleBar(Handle); }
@@ -285,7 +327,7 @@ namespace ExMoreStuff
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing && picture.Image != null) picture.Image.Dispose();
+            if (disposing) { settle.Dispose(); if (picture.Image != null) picture.Image.Dispose(); }
             base.Dispose(disposing);
         }
     }

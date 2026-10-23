@@ -11,7 +11,7 @@ namespace ExMoreStuff
 {
     // Advanced > Costume creation (user 2026-10-12: "a new little sub menu for costume creation"): tools for people
     // making costumes. The first: color pictures. A costume of the player's own (a package with its zip) in each of its
-    // 12 colors, drawn by EX More Stuff in the stance (CostumeRender; the game's picture when it can't), no stage or life
+    // 10 colors, drawn by EX More Stuff in the stance (CostumeRender; the game's picture when it can't), no stage or life
     // bars (PerfTest.ColorPictures), put into its package
     // as <prefix>_<CC>.png for EMBER's character select, ready to share (Tom: "a render of the character with the costume
     // for each color in chara select"). Each row shows the pictures its package has. Color packs too (user 2026-10-18:
@@ -153,6 +153,7 @@ namespace ExMoreStuff
                 row.Make.Click += async (s, e) => await Make(r, row.Colors);
                 row.FullSizeAsked += async color => await MakeFullSize(r, color);
                 row.Check.Click += async (s, e) => await RunCheck(() => CostumeCheck.Find(r.Package), Weight.Name(r));
+                row.Check.Enabled = !checking;
                 row.View.Click += (s, e) => View(r);
                 row.ForceAsked += async color => await ForceDebug(r, color);
                 row.Busy = working;
@@ -165,7 +166,7 @@ namespace ExMoreStuff
             list.ResumeLayout();
         }
 
-        // the color pictures a package has (<prefix>_01.png ... _12.png in its zip), null where there's none
+        // the color pictures a package has (<prefix>_01.png ... _10.png in its zip), null where there's none
         static Image[] Pictures(Installed record)
         {
             var found = new Image[PerfTest.ColorCount];
@@ -213,6 +214,7 @@ namespace ExMoreStuff
         // the costume's renders in any color, pose and turn (CostumeViewer)
         void View(Installed record)
         {
+            if (working) return;
             string g = game, docked = DockedZip(record);
             using (var viewer = new CostumeViewer(g, record.Item.Fighter + "_" + record.Item.Slot.ToString("D2"), Weight.Name(record), () => PerfTest.Costume(g, record.Item, docked)))
                 viewer.ShowDialog(FindForm());
@@ -223,20 +225,25 @@ namespace ExMoreStuff
             if (colors.Count == 0) return;
             string blocked = Blocked != null ? Blocked() : null;   // the game only matters when a costume can't be drawn (PerfTest checks then)
             if (blocked != null) { Say("Can't make them now: " + blocked, true); return; }
+            // an installed costume's package goes into the game again after (PutPictures)
+            if (DockedZip(record) == null && Game.IsRunning()) { Say("Can't make them now: close the game first", true); return; }
             string name = Weight.Name(record), g = game, problem = null;
             string which = colors.Count == PerfTest.ColorCount ? "each color" : colors.Count == 1 ? "color " + colors[0] : "colors " + string.Join(", ", colors);
             if (MessageBox.Show(FindForm(), "EX More Stuff draws " + name + " standing in " + which + ", a second or two each. " + (colors.Count == 1 ? "It goes" : "They go") + " into its package for rollback games' character select.", "EX More Stuff",   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                     MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
             SortedDictionary<int, Bitmap> made = null;
+            bool stopped = false;
             SetWorking(true);
             try
             {
-                made = await Task.Run(() => PerfTest.ColorPictures(g, record.Item, colors, text => BeginInvoke((Action)(() => Say(text))), false, DockedZip(record)));
+                made = await Task.Run(() => PerfTest.ColorPictures(g, record.Item, colors, text => BeginInvoke((Action)(() => Say(text))), false, DockedZip(record), UseGame(name, colors.Count)));
                 Say("Putting the pictures into " + name + "'s package...");
                 await Task.Run(() => PerfTest.PutPictures(g, record.Item, record, made));
             }
+            catch (OperationCanceledException) { stopped = true; }
             catch (Exception ex) { problem = ex.Message; }
             finally { SetWorking(false); }
+            if (stopped) { Say(name + ": no pictures made, the game wasn't opened"); return; }
             if (problem != null)
             {
                 Say("The color pictures weren't made: " + problem, true);
@@ -252,6 +259,15 @@ namespace ExMoreStuff
             try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + record.Package + "\""); } catch (Exception) { }
         }
 
+        // Asked once more before the game makes the pictures of a costume that couldn't be drawn (its confirm said "a
+        // second or two each"); from the drawing's thread, the box on the window's
+        Func<string, bool> UseGame(string name, int runs)
+        {
+            return why => (bool)Invoke((Func<bool>)(() => MessageBox.Show(FindForm(), name + " couldn't be drawn (" + why + "), so the game makes the pictures: it opens " +
+                (runs == 1 ? "once, for a few seconds" : runs + " times, a few seconds each") + ". Go ahead?", "EX More Stuff",
+                MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK));
+        }
+
         // a pack's colors pictured, each into its zip (PerfTest.PackPictures); as Make does for a costume
         async Task MakePack(List<Installed> packs, List<int> colors)
         {
@@ -259,20 +275,25 @@ namespace ExMoreStuff
             if (picked.Count == 0) return;
             string blocked = Blocked != null ? Blocked() : null;   // the game only matters when a costume can't be drawn (PerfTest checks then)
             if (blocked != null) { Say("Can't make them now: " + blocked, true); return; }
+            // an installed pack goes into the game again after (PutPackPictures)
+            if (picked.Any(p => DockedZip(p) == null) && Game.IsRunning()) { Say("Can't make them now: close the game first", true); return; }
             string name = PackName(packs[0]), g = game, problem = null;
             string which = picked.Count == 1 ? "color " + picked[0].Item.Color : "colors " + string.Join(", ", picked.Select(p => p.Item.Color));
             if (MessageBox.Show(FindForm(), "EX More Stuff draws " + Fighters.Name(packs[0].Item.Fighter) + " standing in " + which + ", a second or two each. " + (picked.Count == 1 ? "It goes into the color's package and shows" : "They go into each color's package and show") + " on the Costumes page.", "EX More Stuff",
                     MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
             SortedDictionary<int, Bitmap> made = null;
+            bool stopped = false;
             SetWorking(true);
             try
             {
-                made = await Task.Run(() => PerfTest.PackPictures(g, picked, text => BeginInvoke((Action)(() => Say(text)))));
+                made = await Task.Run(() => PerfTest.PackPictures(g, picked, text => BeginInvoke((Action)(() => Say(text))), false, UseGame(name, picked.Count)));
                 Say("Putting the pictures into " + name + "'s packages...");
                 await Task.Run(() => PerfTest.PutPackPictures(g, picked, made));
             }
+            catch (OperationCanceledException) { stopped = true; }
             catch (Exception ex) { problem = ex.Message; }
             finally { SetWorking(false); }
+            if (stopped) { Say(name + ": no pictures made, the game wasn't opened"); return; }
             if (problem != null)
             {
                 Say("The color pictures weren't made: " + problem, true);
@@ -368,8 +389,7 @@ namespace ExMoreStuff
         readonly FlatButton checkInstalled = new FlatButton("Check installed costumes", true), checkFile = new FlatButton("Check a file or folder..."), showResults = new FlatButton("Show results");
         readonly Label lastCheck = new Label { AutoSize = false, BackColor = Color.Transparent, ForeColor = Theme.Muted, Font = Theme.Font(9.5f), TextAlign = ContentAlignment.MiddleRight };
         CheckCard checkBar;
-        List<CostumeCheck.Result> lastResults;
-        Dictionary<CostumeCheck.Result, CostumeCheck.Source> lastSources;
+        List<CostumeCheck.Result> lastResults;   // only the results: a fix reads its costume again
         string lastTitle;
         bool checking;
 
@@ -380,23 +400,17 @@ namespace ExMoreStuff
                 checkBar = new CheckCard { Margin = new Padding(8, 2, 8, 8) };
                 checkBar.Controls.AddRange(new Control[] { checkInstalled, checkFile, lastCheck, showResults });
                 showResults.Visible = false;
-                // the game's costumes as it loads them (patch_ae2_tu3\battle\chara\<CHR>) and the docked ones (out of the game)
-                checkInstalled.Click += async (s, e) => await RunCheck(() =>
-                {
-                    var found = new List<CostumeCheck.Source>();
-                    string chara = Path.Combine(Game.PatchFolder(game), "battle", "chara");
-                    if (Directory.Exists(chara)) found.AddRange(CostumeCheck.Find(chara));
-                    foreach (string zip in Docked.Load().Where(r => r.Item.IsCostume).Select(r => r.Package).Distinct(StringComparer.OrdinalIgnoreCase))
-                        if (File.Exists(zip)) found.AddRange(CostumeCheck.Find(zip));
-                    return found;
-                }, "installed costumes");
+                // the game's costumes as it loads them (patch_ae2_tu3\battle\chara\<CHR>, the game's own 01-07 left out) and
+                // the docked ones (out of the game)
+                checkInstalled.Click += async (s, e) => await RunCheck(() => CostumeCheck.Installed(game), "installed costumes");
+                // a zip, or the costume a file belongs to in its folder (not the folders below)
                 checkFile.Click += async (s, e) =>
                 {
                     string path;
                     using (var dialog = new OpenFileDialog { Filter = "A costume's zip, or any file in its folder|*.zip;*.emo;*.emm;*.emb|All files|*.*", Title = "Check a costume" })
                     {
                         if (dialog.ShowDialog(FindForm()) != DialogResult.OK) return;
-                        path = dialog.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? dialog.FileName : Path.GetDirectoryName(dialog.FileName);
+                        path = dialog.FileName;
                     }
                     await RunCheck(() => CostumeCheck.Find(path), Path.GetFileName(path));
                 };
@@ -434,28 +448,23 @@ namespace ExMoreStuff
         // the check off the window's thread, then its window
         async Task RunCheck(Func<List<CostumeCheck.Source>> find, string title)
         {
-            if (checking || !Game.IsGameFolder(game)) return;
-            checking = true;
-            checkInstalled.Enabled = checkFile.Enabled = false;
+            if (checking) return;
+            if (!Game.IsGameFolder(game)) { Say("The check needs the game's folder: choose it with Change at the bottom of the window.", true); return; }
+            Checking(true);
             Say("Checking " + title + "...");
             string g = game, problem = null;
             var results = new List<CostumeCheck.Result>();
-            var sources = new Dictionary<CostumeCheck.Result, CostumeCheck.Source>();
             var watch = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                await Task.Run(() =>
-                {
-                    foreach (var source in find())
-                        foreach (var r in CostumeCheck.Check(g, source)) { results.Add(r); sources[r] = source; }
-                });
+                // a costume at a time: only its results stay
+                await Task.Run(() => { foreach (var source in find()) results.AddRange(CostumeCheck.Check(g, source)); });
             }
             catch (Exception ex) { problem = ex.Message; }
-            checking = false;
-            checkInstalled.Enabled = checkFile.Enabled = true;
+            finally { Checking(false); }
             if (problem != null) { Say("The check stopped: " + problem, true); return; }
             if (results.Count == 0) { Say("No costume (CHR_NN.obj.emo) found in " + title + ".", true); return; }
-            lastResults = results; lastSources = sources; lastTitle = title;
+            lastResults = results; lastTitle = title;
             int faulty = results.Count(r => r.Verdict == CostumeCheck.Verdict.Faulty);
             lastCheck.Text = "Last check: " + results.Count + (results.Count == 1 ? " costume" : " costumes") + (faulty > 0 ? ", " + faulty + " need a fix" : ", nothing to fix");
             lastCheck.ForeColor = faulty > 0 ? Theme.Warning : Theme.Muted;
@@ -468,7 +477,15 @@ namespace ExMoreStuff
         void ShowCheck()
         {
             if (lastResults == null) return;
-            using (var window = new CostumeCheckWindow(game, "Costume check: " + lastTitle, lastResults, lastSources)) window.ShowDialog(FindForm());
+            using (var window = new CostumeCheckWindow(game, "Costume check: " + lastTitle, lastResults)) window.ShowDialog(FindForm());
+        }
+
+        // while a check runs, no other: the card's buttons and every costume row's Check wait
+        void Checking(bool on)
+        {
+            checking = on;
+            checkInstalled.Enabled = checkFile.Enabled = !on;
+            foreach (CreationRow row in list.Controls.OfType<CreationRow>()) row.Check.Enabled = !on;
         }
 
         void SetWorking(bool on)
@@ -494,7 +511,7 @@ namespace ExMoreStuff
         public event Action<int> ForceAsked;      // ... or that color made a debug color (user 2026-10-16: "right click > force debug color")
         readonly string title, detail;
         readonly Image[] pictures;
-        readonly int[] numbers;   // each picture's color: 1-12, or a color pack's 30-99
+        readonly int[] numbers;   // each picture's color: 1-10, or a color pack's 30-99
         readonly bool[] picked;
         readonly bool canForce;   // Force debug color in its menu (a costume's; not a pack's)
         bool busy;
@@ -535,6 +552,7 @@ namespace ExMoreStuff
         {
             Make.Enabled = !busy && picked.Any(p => p);
             all.Enabled = !busy;
+            View.Enabled = !busy;   // the viewer draws too: not while pictures are being made
             Invalidate();
         }
 

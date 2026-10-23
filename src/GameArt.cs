@@ -85,6 +85,7 @@ namespace ExMoreStuff
             width = height = 0;
             if (d.Length < 128 || Encoding.ASCII.GetString(d, 0, 4) != "DDS ") return null;
             height = BitConverter.ToInt32(d, 12); width = BitConverter.ToInt32(d, 16);
+            if (width <= 0 || height <= 0 || width > 8192 || height > 8192) return null;   // a damaged header: not gigabytes of nothing
             string fourcc = Encoding.ASCII.GetString(d, 84, 4);
             var pixels = new byte[width * height * 4];
             if (fourcc == "DXT1" || fourcc == "DXT3" || fourcc == "DXT5")

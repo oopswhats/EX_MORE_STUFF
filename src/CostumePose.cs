@@ -276,11 +276,38 @@ namespace ExMoreStuff
                     Parents[i] = p < count ? p : -1;
                     Local.Add(Matrix(d, b + start + i * 80 + 16));
                 }
+                // a damaged model's bone can be its own ancestor (or its own parent): every walk up the skeleton would
+                // never end, so it's refused here
+                var state = new byte[count];   // 0 not seen, 1 on the walk now, 2 reaches the top
+                var walk = new List<int>();
+                for (int i = 0; i < count; i++)
+                {
+                    walk.Clear();
+                    int j = i;
+                    while (j >= 0 && state[j] == 0) { state[j] = 1; walk.Add(j); j = Parents[j]; }
+                    if (j >= 0 && state[j] == 1) throw new Damaged("its skeleton loops (bone " + Names[j] + " is its own ancestor)");
+                    foreach (int k in walk) state[k] = 2;
+                }
+                // global matrices, ancestors first (a walk, not a recursion: a long chain mustn't run out of stack)
                 var global = new double[count][];
-                Func<int, double[]> solve = null;
-                solve = i => global[i] ?? (global[i] = Parents[i] < 0 ? Local[i] : Mul(Local[i], solve(Parents[i])));
-                for (int i = 0; i < count; i++) Bind[Names[i]] = solve(i);
+                for (int i = 0; i < count; i++)
+                {
+                    walk.Clear();
+                    for (int j = i; j >= 0 && global[j] == null; j = Parents[j]) walk.Add(j);
+                    for (int w = walk.Count - 1; w >= 0; w--)
+                    {
+                        int k = walk[w];
+                        global[k] = Parents[k] < 0 ? Local[k] : Mul(Local[k], global[Parents[k]]);
+                    }
+                    Bind[Names[i]] = global[i];
+                }
             }
+        }
+
+        /// <summary>A costume's model that can't be posed: its skeleton is damaged (the reason in its message).</summary>
+        public class Damaged : Exception
+        {
+            public Damaged(string message) : base(message) { }
         }
 
         // ---------- the animation skeleton (.obj.ema) ----------
@@ -510,11 +537,21 @@ namespace ExMoreStuff
                 return animated ? (bool?)absolute : null;
             }
 
-            // Ema.h update_node
+            // Ema.h update_node; a damaged skeleton (a node its own parent, child or sibling, round and round) is refused
+            // before the walk runs out of stack
+            int depth;
+
             bool Update(int number, bool initialize, bool updateParent)
             {
                 Node node = Get(number);
                 if (node == null) return false;
+                if (++depth > 2 * nodes.Count + 16) throw new Damaged("its animation skeleton loops (node " + number + ")");
+                try { return UpdateNode(node, initialize, updateParent); }
+                finally { depth--; }
+            }
+
+            bool UpdateNode(Node node, bool initialize, bool updateParent)
+            {
                 Node parent = Get(node.Parent);
                 if (updateParent && parent != null) Update(parent.Number, initialize, updateParent);
                 bool ok;
@@ -686,7 +723,8 @@ namespace ExMoreStuff
             return name.StartsWith("SCD") || PhysicsWords.Any(lower.Contains);
         }
 
-        // bones the animation doesn't drive follow their nearest ancestor that it does
+        // bones the animation doesn't drive follow their nearest ancestor that it does (walks up end: EmoSkeleton refuses
+        // a skeleton that loops)
         static Dictionary<string, double[]> WithInherited(Dictionary<string, double[]> matrices, EmoSkeleton emo)
         {
             var result = new Dictionary<string, double[]>(matrices);

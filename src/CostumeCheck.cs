@@ -21,9 +21,14 @@ namespace ExMoreStuff
     //    be the stand-in's, bit for bit, or the match desyncs (Samus AGL_09, 2026-10-22).
     //  - An .obj.emm with more materials than its model declares (part table +2, 0 = 256) isn't used at all
     //    (EmModel::bindMaterialSet 0x6c6080): that color draws untextured. A material the model uses that the .obj.emm
-    //    lacks draws white (Juri JRI_38, Sakura SKR_34, Ken KEN_08).
+    //    lacks draws white (Juri JRI_38, Sakura SKR_34, Ken KEN_08); several long-loved skins have that and play, so it's
+    //    worth a look, not a fault.
     //  - The game loads .obj.emo, .shd.emo, .nml.emb, .bsr per costume (Vega also .clw.emo, .msk.emo;
     //    CostumeResourceHolder::load 0x5e5f80); Ember only offers a costume with all ten colors.
+    //  - From the older check (2026-10-22): a model part pointing past the end of its file closes the game (GameBanana's
+    //    Raiden for M. Bison, a texture count 1 -> 6), as do more than 24 bones in one skin palette and more than 31
+    //    submeshes in one part (35 closed it).
+    // Only what the check needs is read (the models, the colors' .obj.emm, the other files' names), one costume at a time.
     static class CostumeCheck
     {
         // Actor::getLocatorBoneName's table; findBoneIndex compares without case
@@ -34,21 +39,30 @@ namespace ExMoreStuff
         static readonly string[] Effects = { "FACE_LEYE", "FACE_REYE", "WAN", "HEN", "HEOPTION", "LARMEFF", "RARMEFF", "LLEGEFF", "RLEGEFF" };
 
         static readonly Regex Model = new Regex(@"^([A-Za-z]{3})_(\d\d)\.obj\.emo$", RegexOptions.IgnoreCase);
+        // the mod's own marker files (Installer, CodeChange): they go into a fixed copy with the costume
+        static readonly Regex Marker = new Regex(@"^(slot_[A-Za-z]{3}_\d\d|code_.+|needs_exms_.+|override_.+)\.txt$", RegexOptions.IgnoreCase);
 
-        public enum Verdict { Ok, Mirror, Noise, Faulty }
+        const int PaletteLimit = 24, SubmeshLimit = 31;
+
+        // Look: plays the same online, but something draws wrong (WHITE)
+        public enum Verdict { Ok, Mirror, Noise, Look, Faulty }
 
         public sealed class Finding
         {
-            public string Kind, Text;   // Kind: DESYNC, DESYNC?, IK, EFFECTS, WHITE, EMM>CAP, FILES, COLORS, SLOT, STOCK
+            // Kind: DESYNC, DESYNC?, IK, EFFECTS, WHITE, EMM>CAP, FILES, COLORS, SLOT, STOCK, BROKEN, PALETTE, SUBMESHES, UNREAD
+            public string Kind, Text;
             public bool Fixable;
         }
 
         public sealed class Result
         {
-            public string Name, Where;   // "AGL_09", the folder or zip
+            public string Name, Where;   // "AGL_09", the folder or zip (read again for a fix)
             public Verdict Verdict;
             public readonly List<Finding> Findings = new List<Finding>();
         }
+
+        // what puts a costume under "Need a fix"
+        static readonly string[] Faults = { "FILES", "EMM>CAP", "COLORS", "SLOT", "BROKEN", "PALETTE", "SUBMESHES", "UNREAD" };
 
         // ---- reading the files ----
 
@@ -69,6 +83,15 @@ namespace ExMoreStuff
             return Encoding.GetEncoding(28591).GetString(d, o, end - o);
         }
 
+        // a file packed as #EMZ (a 16-byte header, then deflate) as the game reads it; any other as it is
+        static byte[] Unwrap(byte[] d)
+        {
+            if (d == null || d.Length < 16 || Encoding.ASCII.GetString(d, 0, 4) != "#EMZ") return d;
+            using (var src = new MemoryStream(d, 16, d.Length - 16))
+            using (var z = new DeflateStream(src, CompressionMode.Decompress))
+            using (var o = new MemoryStream()) { z.CopyTo(o); return o.ToArray(); }
+        }
+
         /// <summary>A model's skeleton: names, parents, rest matrices (node records of 80 bytes, matrix at +16).</summary>
         static List<Bone> Skeleton(byte[] emo)
         {
@@ -81,7 +104,7 @@ namespace ExMoreStuff
                 int o = nodes + i * 80, parent = U16(emo, o);
                 var m = new float[16];
                 for (int k = 0; k < 16; k++) m[k] = BitConverter.ToSingle(emo, o + 16 + k * 4);
-                bones.Add(new Bone { Name = CString(emo, s + I32(emo, names + i * 4)), Parent = parent < count ? parent : -1, Local = m });
+                bones.Add(new Bone { Name = CString(emo, s + I32(emo, names + i * 4)), Parent = parent < count && parent != i ? parent : -1, Local = m });
             }
             return bones;
         }
@@ -132,11 +155,19 @@ namespace ExMoreStuff
         // Juri's "skin", Yun's "Shoes"), so every lookup here ignores it.
         static bool Has(List<string> materials, string name) { return materials.Contains(name, StringComparer.OrdinalIgnoreCase); }
 
+        // the fighters' animations read once (only bone names and kinds are kept)
+        static readonly Dictionary<string, Dictionary<string, HashSet<int>>> unkeyed = new Dictionary<string, Dictionary<string, HashSet<int>>>(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>Upper-case bone name -> the transform kinds (0 translation, 1 rotation, 2 scale) that at least one of the
         /// fighter's animations leaves to the model. Animation files: every .ema of the fighter but the camera's; in the face
         /// file only the bones it animates count (a layer of its own).</summary>
         static Dictionary<string, HashSet<int>> Unkeyed(string game, string fighter)
         {
+            lock (unkeyed)
+            {
+                Dictionary<string, HashSet<int>> known;
+                if (unkeyed.TryGetValue(game + "|" + fighter, out known)) return known;
+            }
             var loose = new Dictionary<string, HashSet<int>>();
             foreach (string kind in new[] { "obj", "uc1", "uc2", "dm1", "dm2", "fce" })
             {
@@ -175,7 +206,110 @@ namespace ExMoreStuff
                     }
                 }
             }
+            lock (unkeyed) unkeyed[game + "|" + fighter] = loose;
             return loose;
+        }
+
+        // ---- what closes the game (the older check's rules, its header-only reading) ----
+
+        sealed class Shape
+        {
+            public string Broken;   // why the model can't be read as the game reads it, or null
+            public int Palette, Submeshes;   // the most bones in one skin palette / submeshes in one part
+        }
+
+        static void Need(byte[] d, long offset, long length, string what)
+        {
+            if (offset < 0 || length < 0 || offset + length > d.Length) throw new InvalidDataException(what);
+        }
+
+        /// <summary>Every pointer and count of a model checked against the file's size, as the game follows them, with the
+        /// most bones in one skin palette and the most submeshes in one part.</summary>
+        static Shape Structure(byte[] d)
+        {
+            var shape = new Shape();
+            try
+            {
+                Need(d, 0, 0x30, "too short");
+                if (Encoding.ASCII.GetString(d, 0, 4) != "#EMO") throw new InvalidDataException("not a model file");
+                int s = I32(d, 16), bones = 0;
+                if (s != 0)
+                {
+                    Need(d, s, 0x24, "the skeleton is past the end");
+                    bones = U16(d, s);
+                    int nodes = I32(d, s + 8), names = I32(d, s + 12), inverse = I32(d, s + 0x1c);
+                    Need(d, (long)s + nodes, bones * 80L, "the skeleton's bones run past the end");
+                    Need(d, (long)s + names, bones * 4L, "the skeleton's names run past the end");
+                    if (inverse != 0) Need(d, (long)s + inverse, bones * 64L, "the skeleton's bind matrices run past the end");
+                    for (int i = 0; i < bones; i++)
+                    {
+                        int parent = BitConverter.ToInt16(d, s + nodes + i * 80);
+                        if (parent >= bones) throw new InvalidDataException("bone " + i + " has parent " + parent + " of " + bones);
+                        Need(d, (long)s + I32(d, s + names + i * 4), 1, "bone " + i + "'s name is past the end");
+                    }
+                }
+                int pt = I32(d, 0xc);
+                Need(d, pt, 8, "its part table is past the end");
+                for (int p = 0; p < BitConverter.ToInt16(d, pt); p++)
+                {
+                    Need(d, pt + 8 + p * 4L, 4, "the part list runs past the end");
+                    long po = (long)pt + I32(d, pt + 8 + p * 4);
+                    Need(d, po, 4, "part " + p + " is past the end");
+                    int groups = I32(d, (int)po), sub = 0;
+                    if (groups < 0 || groups > 4096) throw new InvalidDataException("part " + p + " has " + groups + " blocks");
+                    for (int g = 0; g < groups; g++)
+                    {
+                        Need(d, po + 4 + g * 4L, 4, "part " + p + "'s block list runs past the end");
+                        long go = po + I32(d, (int)(po + 4 + g * 4));
+                        Need(d, go, 8, "part " + p + "'s block " + g + " is past the end");
+                        for (int r = 0; r < U16(d, (int)go + 6); r++)
+                        {
+                            Need(d, go + 8 + r * 4L, 4, "part " + p + "'s model list runs past the end");
+                            sub += PartModel(d, go + I32(d, (int)(go + 8 + r * 4)), p, bones, shape);
+                        }
+                    }
+                    shape.Submeshes = Math.Max(shape.Submeshes, sub);
+                }
+            }
+            catch (InvalidDataException e) { shape.Broken = e.Message; }
+            return shape;
+        }
+
+        // a model record of a part: its texture slots, vertices and submeshes inside the file; returns its submeshes
+        static int PartModel(byte[] d, long at, int part, int boneCount, Shape shape)
+        {
+            string where = "part " + part;
+            Need(d, at, 80, where + " is past the end");
+            int b = (int)at;
+            int textures = I32(d, b + 4), list = I32(d, b + 12), vcount = U16(d, b + 16), stride = U16(d, b + 18);
+            int vlist = I32(d, b + 20), subs = U16(d, b + 26), sublist = I32(d, b + 28);
+            if (textures < 0 || textures > 4096) throw new InvalidDataException(where + " has " + textures + " texture slots");
+            for (int t = 0; t < textures; t++)
+            {
+                Need(d, (long)b + list + t * 4L, 4, where + "'s texture list runs past the end");
+                long tp = (long)b + I32(d, b + list + t * 4);
+                Need(d, tp, 4, where + "'s texture slot " + t + " is past the end");
+                int layers = I32(d, (int)tp);
+                if (layers < 0 || layers > 64) throw new InvalidDataException(where + "'s texture slot " + t + " has " + layers + " layers");
+                Need(d, tp + 4, layers * 12L, where + "'s texture slot " + t + " runs past the end");
+            }
+            Need(d, (long)b + vlist, (long)vcount * stride, where + "'s vertices run past the end");
+            for (int s = 0; s < subs; s++)
+            {
+                Need(d, (long)b + sublist + s * 4L, 4, where + "'s submesh list runs past the end");
+                long sp = (long)b + I32(d, b + sublist + s * 4);
+                Need(d, sp, 54, where + "'s submesh " + s + " is past the end");
+                int material = U16(d, (int)sp + 16), indices = U16(d, (int)sp + 18), bones = U16(d, (int)sp + 20);
+                if (material >= textures && textures > 0) throw new InvalidDataException(where + "'s submesh " + s + " uses texture slot " + material + " of " + textures);
+                Need(d, sp + 54, indices * 2L + bones * 2L, where + "'s submesh " + s + " runs past the end");
+                for (int k = 0; k < bones; k++)
+                {
+                    int bone = U16(d, (int)sp + 54 + indices * 2 + k * 2);
+                    if (boneCount > 0 && bone >= boneCount) throw new InvalidDataException(where + " is weighted to bone " + bone + " of " + boneCount);
+                }
+                shape.Palette = Math.Max(shape.Palette, bones);
+            }
+            return subs;
         }
 
         // ---- the locator rule ----
@@ -190,6 +324,13 @@ namespace ExMoreStuff
 
         static string ParentName(List<Bone> bones, Bone b) { return b.Parent < 0 ? null : bones[b.Parent].Name.ToUpperInvariant(); }
 
+        // a bone and its parents up to the root; in a damaged skeleton whose parents run in a circle, up to the repeat
+        static IEnumerable<int> Up(List<Bone> bones, int i)
+        {
+            var seen = new HashSet<int>();
+            while (i >= 0 && i < bones.Count && seen.Add(i)) { yield return i; i = bones[i].Parent; }
+        }
+
         static Dictionary<string, HashSet<string>> Chains(List<Bone> bones)
         {
             var by = ByName(bones);
@@ -197,8 +338,9 @@ namespace ExMoreStuff
             foreach (string locator in Gameplay.Concat(Effects))
             {
                 string name = locator;
+                var seen = new HashSet<string>();   // names can repeat: a walk by name could go round
                 Bone b;
-                while (name != null && by.TryGetValue(name, out b))
+                while (name != null && seen.Add(name) && by.TryGetValue(name, out b))
                 {
                     HashSet<string> set;
                     if (!above.TryGetValue(name, out set)) above[name] = set = new HashSet<string>();
@@ -222,10 +364,12 @@ namespace ExMoreStuff
             return r;
         }
 
+        // the bone's rest pose times its parents' (row vectors: local x parent x ...)
         static float[] World(List<Bone> bones, int i)
         {
-            Bone b = bones[i];
-            return b.Parent < 0 ? (float[])b.Local.Clone() : Multiply(b.Local, World(bones, b.Parent));
+            float[] m = null;
+            foreach (int b in Up(bones, i)) m = m == null ? (float[])bones[b].Local.Clone() : Multiply(m, bones[b].Local);
+            return m;
         }
 
         static string Size(double d) { return d >= 1e-3 ? "moved" : d >= 1e-4 ? "small" : "noise"; }
@@ -248,7 +392,8 @@ namespace ExMoreStuff
             // above TRS the bones are named per model: TRS's world rest pose covers them
             var roots = new HashSet<string>();
             Bone trs;
-            for (string n = theirBy.TryGetValue("TRS", out trs) ? ParentName(theirs, trs) : null; n != null; n = ParentName(theirs, theirBy[n])) roots.Add(n);
+            if (theirBy.TryGetValue("TRS", out trs))
+                for (string n = ParentName(theirs, trs); n != null && roots.Add(n); n = ParentName(theirs, theirBy[n])) { }
             var found = new List<Difference>();
             Func<string, bool, string> level = (name, rotation) =>
                 !need[name].Overlaps(Gameplay) ? "EFFECTS" : rotation ? "DESYNC?" : "DESYNC";
@@ -317,12 +462,14 @@ namespace ExMoreStuff
 
         // ---- checking ----
 
-        /// <summary>A costume's files by name (folder or zip), read on demand.</summary>
+        /// <summary>A costume's files by name (folder or zip): the names listed, a file read only when asked for.</summary>
         public sealed class Source
         {
             public string Where;
             public Func<string, byte[]> Read;   // null when there's no such file
             public List<string> Names;
+            public bool CustomOnly;   // the installed costumes: 01-07 are the game's own (or EX More Stuff's swaps of them), not checked
+            public string Problem;    // a zip that couldn't be opened: why
         }
 
         public static Source FromFolder(string folder)
@@ -331,28 +478,78 @@ namespace ExMoreStuff
             return new Source { Where = folder, Names = names, Read = n => { string p = Path.Combine(folder, n); return File.Exists(p) ? File.ReadAllBytes(p) : null; } };
         }
 
+        // the zip's file names (in any of its folders, the first of a name) now, each file unpacked when it's read
         public static Source FromZip(string zip)
         {
-            var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            var entries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             using (var z = ZipFile.OpenRead(zip))
                 foreach (var e in z.Entries.Where(e => e.Name != ""))
-                    using (var s = e.Open())
-                    using (var m = new MemoryStream()) { s.CopyTo(m); files[e.Name] = m.ToArray(); }
-            return new Source { Where = zip, Names = files.Keys.ToList(), Read = n => { byte[] b; return files.TryGetValue(n, out b) ? b : null; } };
+                    if (!entries.ContainsKey(e.Name)) entries[e.Name] = e.FullName;
+            return new Source
+            {
+                Where = zip, Names = entries.Keys.ToList(),
+                Read = n =>
+                {
+                    string full;
+                    if (!entries.TryGetValue(n, out full)) return null;
+                    using (var z = ZipFile.OpenRead(zip))
+                    {
+                        var e = z.GetEntry(full);
+                        if (e == null) return null;
+                        using (var s = e.Open())
+                        using (var m = new MemoryStream()) { s.CopyTo(m); return m.ToArray(); }
+                    }
+                }
+            };
         }
 
-        /// <summary>Every costume model (CHR_NN.obj.emo) in a folder (and the folders in it), a zip, or a zip's folder.</summary>
+        static Source ZipOrProblem(string zip)
+        {
+            try { return FromZip(zip); }
+            catch (Exception ex) { return new Source { Where = zip, Names = new List<string>(), Read = n => null, Problem = ex.Message }; }
+        }
+
+        /// <summary>A folder or zip again (the results window's Fix reads the costume afresh).</summary>
+        public static Source Open(string where)
+        {
+            return File.Exists(where) ? FromZip(where) : FromFolder(where);
+        }
+
+        /// <summary>Every costume model (CHR_NN.obj.emo) in a folder (and the folders in it), a zip, or for any other file the
+        /// costume it belongs to in its own folder (its CHR_NN, else the folder's costumes; no folders below).</summary>
         public static List<Source> Find(string path)
         {
             var found = new List<Source>();
-            if (File.Exists(path)) { if (path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) found.Add(FromZip(path)); }
+            if (File.Exists(path))
+            {
+                if (path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) found.Add(ZipOrProblem(path));
+                else
+                {
+                    var folder = FromFolder(Path.GetDirectoryName(Path.GetFullPath(path)));
+                    Match m = Regex.Match(Path.GetFileName(path), @"^([A-Za-z]{3}_\d\d)[._]");
+                    found.Add(m.Success && folder.Names.Contains(m.Groups[1].Value + ".obj.emo", StringComparer.OrdinalIgnoreCase) ? Only(folder, m.Groups[1].Value) : folder);
+                }
+            }
             else if (Directory.Exists(path))
             {
                 foreach (string dir in new[] { path }.Concat(Directory.GetDirectories(path, "*", SearchOption.AllDirectories)))
                     if (Directory.GetFiles(dir, "*.obj.emo").Any(f => Model.IsMatch(Path.GetFileName(f)))) found.Add(FromFolder(dir));
-                foreach (string zip in Directory.GetFiles(path, "*.zip", SearchOption.AllDirectories)) found.Add(FromZip(zip));
+                foreach (string zip in Directory.GetFiles(path, "*.zip", SearchOption.AllDirectories)) found.Add(ZipOrProblem(zip));
             }
-            return found.Where(s => s.Names.Any(n => Model.IsMatch(n))).ToList();
+            return found.Where(s => s.Problem != null || s.Names.Any(n => Model.IsMatch(n))).ToList();
+        }
+
+        /// <summary>The costumes as the game loads them (patch_ae2_tu3\battle\chara\&lt;CHR&gt;) and the docked ones (out of
+        /// the game), the game's own slots 01-07 left out.</summary>
+        public static List<Source> Installed(string game)
+        {
+            var found = new List<Source>();
+            string chara = Path.Combine(Game.PatchFolder(game), "battle", "chara");
+            if (Directory.Exists(chara)) found.AddRange(Find(chara));
+            foreach (string zip in Docked.Load().Where(r => r.Item.IsCostume).Select(r => r.Package).Distinct(StringComparer.OrdinalIgnoreCase))
+                if (File.Exists(zip)) found.AddRange(Find(zip));
+            foreach (Source s in found) s.CustomOnly = true;
+            return found;
         }
 
         /// <summary>The game's stock model of a costume (1-based), or null.</summary>
@@ -365,24 +562,54 @@ namespace ExMoreStuff
         public static List<Result> Check(string game, Source source)
         {
             var results = new List<Result>();
-            var animations = new Dictionary<string, Dictionary<string, HashSet<int>>>();
+            if (source.Problem != null)
+            {
+                var bad = new Result { Name = Path.GetFileName(source.Where), Where = source.Where, Verdict = Verdict.Faulty };
+                bad.Findings.Add(new Finding { Kind = "UNREAD", Text = "the zip couldn't be read: " + source.Problem });
+                results.Add(bad);
+                return results;
+            }
+            var stock = new Dictionary<string, byte[][]>();   // fighter -> its costumes 1-3, while this folder or zip is checked
             foreach (string model in source.Names.Where(n => Model.IsMatch(n)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
             {
                 Match m = Model.Match(model);
-                string fighter = m.Groups[1].Value.ToUpperInvariant(), stem = model.Substring(0, 6);
-                int slot = int.Parse(m.Groups[2].Value);
-                var r = new Result { Name = stem.ToUpperInvariant(), Where = source.Where };
-                Action<string, string, bool> add = (kind, text, fixable) => r.Findings.Add(new Finding { Kind = kind, Text = text, Fixable = fixable });
-                byte[] emo = source.Read(model);
-                if (slot < Catalog.FirstCustomCostume || slot > Catalog.LastSlot) add("SLOT", "costume " + slot.ToString("D2") + " is outside " + Catalog.FirstCustomCostume.ToString("D2") + ".." + Catalog.LastSlot + ": Ember doesn't offer it", false);
+                if (source.CustomOnly && int.Parse(m.Groups[2].Value) < Catalog.FirstCustomCostume) continue;
+                var r = new Result { Name = model.Substring(0, 6).ToUpperInvariant(), Where = source.Where };
+                // one damaged costume is a finding; the others are still checked
+                try { CheckOne(game, source, model, r, stock); }
+                catch (Exception ex) { r.Findings.Add(new Finding { Kind = "UNREAD", Text = "it couldn't be read: " + ex.Message }); }
+                if (r.Findings.Any(f => Faults.Contains(f.Kind))) r.Verdict = Verdict.Faulty;
+                else if (r.Findings.Any(f => f.Kind == "WHITE") && r.Verdict < Verdict.Look) r.Verdict = Verdict.Look;
+                results.Add(r);
+            }
+            return results;
+        }
+
+        static void CheckOne(string game, Source source, string model, Result r, Dictionary<string, byte[][]> stock)
+        {
+            Match m = Model.Match(model);
+            string fighter = m.Groups[1].Value.ToUpperInvariant(), stem = model.Substring(0, 6);
+            int slot = int.Parse(m.Groups[2].Value);
+            Action<string, string, bool> add = (kind, text, fixable) => r.Findings.Add(new Finding { Kind = kind, Text = text, Fixable = fixable });
+            // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
+            if (slot < Catalog.FirstCustomCostume || slot > Catalog.LastSlot) add("SLOT", "costume " + slot.ToString("D2") + " is outside " + Catalog.FirstCustomCostume.ToString("D2") + ".." + Catalog.LastSlot + ": rollback games don't offer it", false);
+
+            byte[] emo = Unwrap(source.Read(model));
+            Shape shape = Structure(emo);
+            if (shape.Broken != null) add("BROKEN", "its model is damaged (" + shape.Broken + ")", false);
+            else
+            {
+                if (shape.Palette > PaletteLimit) add("PALETTE", shape.Palette + " bones in one skin palette (the game takes " + PaletteLimit + ")", false);
+                if (shape.Submeshes > SubmeshLimit) add("SUBMESHES", shape.Submeshes + " pieces in one part (the game closed with 35; " + SubmeshLimit + " work)", false);
 
                 // the locators, against each stand-in
                 var verdicts = new Dictionary<int, List<Difference>>();
-                if (!animations.ContainsKey(fighter)) animations[fighter] = Unkeyed(game, fighter);
+                var loose = Unkeyed(game, fighter);
+                if (!stock.ContainsKey(fighter)) stock[fighter] = Enumerable.Range(1, 3).Select(c => Stock(game, fighter, c)).ToArray();
                 for (int standIn = 1; standIn <= 3; standIn++)
                 {
-                    byte[] stock = Stock(game, fighter, standIn);
-                    if (stock != null) verdicts[standIn] = LocatorDifferences(emo, stock, animations[fighter]);
+                    byte[] theirs = stock[fighter][standIn - 1];
+                    if (theirs != null) verdicts[standIn] = LocatorDifferences(emo, theirs, loose);
                 }
                 if (verdicts.Count == 0) add("STOCK", "the game's " + fighter + "_01..03.obj.emo weren't found: the locators weren't checked", false);
                 foreach (string level in new[] { "DESYNC", "DESYNC?", "IK", "EFFECTS" })
@@ -399,35 +626,37 @@ namespace ExMoreStuff
                 var mine = verdicts.TryGetValue(1, out first) ? first.Where(d => d.Level != "EFFECTS").ToList() : new List<Difference>();
                 bool mirror = verdicts.Where(v => v.Key != 1).Any(v => v.Value.Any(d => d.Level != "EFFECTS"));
                 r.Verdict = mine.Any(d => d.Size != "noise") ? Verdict.Faulty : mine.Count > 0 ? Verdict.Noise : mirror ? Verdict.Mirror : Verdict.Ok;
-
-                // files and materials
-                var parts = new List<string> { ".obj.emo", ".shd.emo", ".nml.emb", ".bsr" };
-                if (fighter == "BLR") parts.AddRange(new[] { ".clw.emo", ".msk.emo" });
-                var lost = parts.Where(p => !source.Names.Contains(stem + p, StringComparer.OrdinalIgnoreCase)).ToList();
-                if (lost.Count > 0) add("FILES", "missing " + string.Join(" ", lost.Select(p => stem + p)) + " (the game loads them for every costume)", true);
-                int capacity = MaterialCapacity(emo);
-                var used = UsedMaterials(emo);
-                var absent = new List<string>();
-                var white = new Dictionary<string, List<string>>();   // lacking materials -> colors
-                for (int color = 1; color <= 10; color++)
-                {
-                    string name = stem + "_" + color.ToString("D2");
-                    byte[] emm = source.Read(name + ".obj.emm");
-                    if (emm == null || source.Read(name + ".col.emb") == null) { absent.Add(color.ToString("D2")); continue; }
-                    var have = Materials(emm);
-                    if (have.Count > capacity) add("EMM>CAP", name + ".obj.emm has " + have.Count + " materials, the model takes " + capacity + ": the game doesn't use it (untextured)", false);
-                    var lacking = used.Where(u => !Has(have, u)).ToList();
-                    if (lacking.Count == 0) continue;
-                    string key = string.Join(", ", lacking);
-                    if (!white.ContainsKey(key)) white[key] = new List<string>();
-                    white[key].Add(color.ToString("D2"));
-                }
-                foreach (var w in white) add("WHITE", "colors " + string.Join(" ", w.Value) + ": the .obj.emm lacks " + w.Key + " (drawn white)", true);
-                if (absent.Count > 0) add("COLORS", "missing colors " + string.Join(" ", absent) + ": Ember only offers a costume with all ten", false);
-                if (r.Findings.Any(f => f.Kind == "FILES" || f.Kind == "EMM>CAP" || f.Kind == "WHITE" || f.Kind == "COLORS" || f.Kind == "SLOT")) r.Verdict = Verdict.Faulty;
-                results.Add(r);
             }
-            return results;
+
+            // files and materials (the colors' textures only by name)
+            var parts = new List<string> { ".obj.emo", ".shd.emo", ".nml.emb", ".bsr" };
+            if (fighter == "BLR") parts.AddRange(new[] { ".clw.emo", ".msk.emo" });
+            var lost = parts.Where(p => !source.Names.Contains(stem + p, StringComparer.OrdinalIgnoreCase)).ToList();
+            if (lost.Count > 0) add("FILES", "missing " + string.Join(" ", lost.Select(p => stem + p)) + " (the game loads them for every costume)", true);
+            int capacity = shape.Broken == null ? MaterialCapacity(emo) : 0;
+            var used = shape.Broken == null ? UsedMaterials(emo) : new List<string>();
+            var absent = new List<string>();
+            var white = new Dictionary<string, List<string>>();   // lacking materials -> colors
+            for (int color = 1; color <= 10; color++)
+            {
+                string name = stem + "_" + color.ToString("D2");
+                if (!source.Names.Contains(name + ".obj.emm", StringComparer.OrdinalIgnoreCase) || !source.Names.Contains(name + ".col.emb", StringComparer.OrdinalIgnoreCase))
+                {
+                    absent.Add(color.ToString("D2"));
+                    continue;
+                }
+                if (shape.Broken != null) continue;
+                var have = Materials(Unwrap(source.Read(name + ".obj.emm")));
+                if (have.Count > capacity) add("EMM>CAP", name + ".obj.emm has " + have.Count + " materials, the model takes " + capacity + ": the game doesn't use it (untextured)", false);
+                var lacking = used.Where(u => !Has(have, u)).ToList();
+                if (lacking.Count == 0) continue;
+                string key = string.Join(", ", lacking);
+                if (!white.ContainsKey(key)) white[key] = new List<string>();
+                white[key].Add(color.ToString("D2"));
+            }
+            foreach (var w in white) add("WHITE", "colors " + string.Join(" ", w.Value) + ": the .obj.emm lacks " + w.Key + " (drawn white)", true);
+            // ROLLBACK-NAME
+            if (absent.Count > 0) add("COLORS", "missing colors " + string.Join(" ", absent) + ": rollback games only offer a costume with all ten colors", false);
         }
 
         // ---- fixing ----
@@ -440,7 +669,7 @@ namespace ExMoreStuff
             List<Bone> mine = Skeleton(emo), theirs = Skeleton(standIn);
             var theirBy = ByName(theirs);
             var need = Chains(theirs);
-            int s = I32(emo, 16), nodes = s + I32(emo, s + 8), inverse = s + I32(emo, s + 0x1c);
+            int s = I32(emo, 16), nodes = s + I32(emo, s + 8), inverseAt = I32(emo, s + 0x1c), inverse = s + inverseAt;
             var oldWorld = Enumerable.Range(0, mine.Count).Select(i => World(mine, i)).ToList();
             int changed = 0;
             foreach (Bone b in mine)
@@ -455,6 +684,7 @@ namespace ExMoreStuff
             for (int i = 0; i < mine.Count; i++)
             {
                 for (int k = 0; k < 16; k++) Buffer.BlockCopy(BitConverter.GetBytes(mine[i].Local[k]), 0, emo, nodes + i * 80 + 16 + k * 4, 4);
+                if (inverseAt == 0) continue;   // no bind matrices: never written over the skeleton's header
                 float[] inv = Inverse(newWorld[i]);
                 for (int k = 0; k < 16; k++) Buffer.BlockCopy(BitConverter.GetBytes(inv[k]), 0, emo, inverse + i * 64 + k * 4, 4);
             }
@@ -477,12 +707,15 @@ namespace ExMoreStuff
                         float[] w = { BitConverter.ToSingle(emo, o + 52), BitConverter.ToSingle(emo, o + 56), BitConverter.ToSingle(emo, o + 60), 0 };
                         w[3] = 1 - w[0] - w[1] - w[2];
                         var mat = new double[16];
+                        bool any = false;
                         for (int j = 0; j < 4; j++)
                         {
                             int id = emo[o + 48 + j];
                             if (w[j] == 0 || id >= nodeList.Length || nodeList[id] >= change.Count) continue;
                             for (int q = 0; q < 16; q++) mat[q] += w[j] * change[nodeList[id]][q];
+                            any = true;
                         }
+                        if (!any) continue;   // none of its bones known: it stays where it was (not at the origin)
                         Transform(emo, o, mat, true);
                         Transform(emo, o + 12, mat, false);
                     }
@@ -527,9 +760,12 @@ namespace ExMoreStuff
         /// of the fighter has every material the model uses, its .obj.emm per color replaces the costume's (the model was
         /// built on it, Juri JRI_38); otherwise the model's missing names are renamed to the closest material every color has
         /// (same name in other case, else the most alike, else the one the model uses most; Sakura SKR_34). Never adds a
-        /// material (the color's .obj.emm must stay within the model's capacity). Returns what it did, or null.</summary>
-        public static string FixMaterials(string game, string fighter, string stem, byte[] emo, Dictionary<string, byte[]> files)
+        /// material (the color's .obj.emm must stay within the model's capacity). Works on copies: `files` gets the changed
+        /// files, the bytes it held stay as they were. Returns what it did, or null.</summary>
+        public static string FixMaterials(string game, string fighter, string stem, Dictionary<string, byte[]> files)
         {
+            string modelName = stem + ".obj.emo";
+            byte[] emo = files[modelName];
             var used = UsedMaterials(emo);
             var colors = Enumerable.Range(1, 10).Select(c => stem + "_" + c.ToString("D2") + ".obj.emm").Where(files.ContainsKey).ToList();
             if (colors.Count == 0) return null;
@@ -539,20 +775,22 @@ namespace ExMoreStuff
             var renamed = new List<string>();
             foreach (string c in colors)
             {
-                byte[] emm = files[c];
-                int t = I32(emm, 0xc);
+                byte[] emm = null;   // copied on its first change
                 foreach (string missing in used.Where(u => !Has(have[c], u)).ToList())
                 {
                     var spare = Enumerable.Range(0, have[c].Count).Where(i => !Has(used, have[c][i]))
                         .Select(i => new { i, r = Alike(have[c][i].ToLowerInvariant(), missing.ToLowerInvariant()) })
                         .Where(x => x.r >= 0.75).OrderByDescending(x => x.r).FirstOrDefault();   // eyes/eye, not ring/finger
                     if (spare == null) continue;
+                    if (emm == null) emm = (byte[])files[c].Clone();
+                    int t = I32(emm, 0xc);
                     byte[] bytes = new byte[32];
                     Encoding.GetEncoding(28591).GetBytes(missing, 0, Math.Min(missing.Length, 31), bytes, 0);
                     Buffer.BlockCopy(bytes, 0, emm, t + I32(emm, t + 4 + spare.i * 4), 32);
                     renamed.Add(c.Substring(0, c.Length - 8) + ": " + have[c][spare.i] + " -> " + missing);
                     have[c][spare.i] = missing;
                 }
+                if (emm != null) files[c] = emm;
             }
             string inEmm = renamed.Count > 0 ? "materials renamed in the colors: " + string.Join(", ", renamed) : null;
             if (!have.Values.Any(h => used.Any(u => !Has(h, u)))) return inEmm;
@@ -582,6 +820,7 @@ namespace ExMoreStuff
                 string close = common.Select(n => new { n, r = Alike(n, missing) }).Where(x => x.r >= 0.5).OrderByDescending(x => x.r).Select(x => x.n).FirstOrDefault();
                 map[missing] = close ?? (counts.Count > 0 ? counts[0] : common[0]);
             }
+            emo = (byte[])emo.Clone();
             foreach (int sm in Models(emo).SelectMany(m => Submeshes(emo, m)).ToList())
             {
                 string name = CString(emo, sm + 6), to;
@@ -590,6 +829,7 @@ namespace ExMoreStuff
                 Encoding.GetEncoding(28591).GetBytes(to, 0, Math.Min(to.Length, 31), bytes, 0);
                 Buffer.BlockCopy(bytes, 0, emo, sm + 6, 32);
             }
+            files[modelName] = emo;
             return (inEmm != null ? inEmm + "; " : "") + "materials renamed in the model: " + string.Join(", ", map.Select(p => p.Key + " -> " + p.Value));
         }
 
@@ -603,19 +843,62 @@ namespace ExMoreStuff
             return a.Length + b.Length == 0 ? 1 : 2.0 * l[a.Length, b.Length] / (a.Length + b.Length);
         }
 
-        /// <summary>One costume's files (CHR_NN...) of a folder or zip that holds more (the game's chara folder).</summary>
+        /// <summary>One costume's files (CHR_NN.* and CHR_NN_*) of a folder or zip that holds more (the game's chara folder),
+        /// with the mod's marker files (slot_CHR_NN.txt, code_, needs_exms_, override_).</summary>
         public static Source Only(Source source, string stem)
         {
-            return new Source { Where = source.Where, Read = source.Read, Names = source.Names.Where(n => n.StartsWith(stem, StringComparison.OrdinalIgnoreCase)).ToList() };
+            Func<string, bool> mine = n => n.StartsWith(stem + ".", StringComparison.OrdinalIgnoreCase) || n.StartsWith(stem + "_", StringComparison.OrdinalIgnoreCase) ||
+                (Marker.IsMatch(n) && (!n.StartsWith("slot_", StringComparison.OrdinalIgnoreCase) || string.Equals(n, "slot_" + stem + ".txt", StringComparison.OrdinalIgnoreCase)));
+            return new Source { Where = source.Where, Read = source.Read, Names = source.Names.Where(mine).ToList(), CustomOnly = source.CustomOnly, Problem = source.Problem };
+        }
+
+        // a path as compared: full, no trailing separator
+        static string Full(string path)
+        {
+            string full = Path.GetFullPath(path);
+            return full.Length > 3 ? full.TrimEnd('\\', '/') : full;   // a drive's root keeps its separator
+        }
+
+        /// <summary>Whether a path is the game's folder or inside it.</summary>
+        public static bool InGame(string game, string path)
+        {
+            string g = Full(game), p = Full(path);
+            return string.Equals(p, g, StringComparison.OrdinalIgnoreCase) || p.StartsWith(g + "\\", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Where a fixed copy goes when nobody says: "&lt;name&gt; - fixed" beside it (a folder, or a zip for a zip).</summary>
+        public static string DefaultTarget(string where)
+        {
+            where = Full(where);
+            return where.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? where.Substring(0, where.Length - 4) + " - fixed.zip" : where + " - fixed";
+        }
+
+        /// <summary>Why a fixed copy can't go to `target`, in a player's words, or null: never over the costume itself (or a
+        /// file of its folder), never into the game's folder.</summary>
+        public static string TargetProblem(string game, Source source, string target)
+        {
+            string t = Full(target), s = Full(source.Where);
+            if (string.Equals(t, s, StringComparison.OrdinalIgnoreCase) ||
+                (Directory.Exists(s) && string.Equals(Path.GetDirectoryName(t), s, StringComparison.OrdinalIgnoreCase) && source.Names.Contains(Path.GetFileName(t), StringComparer.OrdinalIgnoreCase)))
+                return "that's the costume itself, and it stays as it is. Pick another place.";
+            if (game != null && InGame(game, t)) return "that's inside the game's folder. Pick a place outside it; the copy goes into the game with Advanced > Add Mod From File.";
+            return null;
         }
 
         /// <summary>A fixed copy of the costumes in a folder or zip, next to it ("&lt;name&gt; - fixed", a folder or a zip) or
         /// at `target` (a zip when it ends .zip): locators aligned to the stand-in, materials put right, missing parts
-        /// (.shd.emo, .nml.emb, .bsr) from the game's costume 1. The original stays as it is. Returns the copy's path and
-        /// what was done.</summary>
+        /// (.shd.emo, .nml.emb, .bsr) from the game's costume 1. The original stays as it is; a target that's the original
+        /// or in the game's folder is refused. Returns the copy's path and what was done.</summary>
         public static string Fix(string game, Source source, List<string> done, string target = null)
         {
+            if (source.Problem != null) throw new InvalidOperationException("the zip couldn't be read: " + source.Problem);
+            target = Full(target ?? DefaultTarget(source.Where));
+            string why = TargetProblem(game, source, target);
+            if (why != null) throw new InvalidOperationException("the fixed copy can't go to " + target + ": " + why);
             var files = source.Names.ToDictionary(n => n, n => source.Read(n), StringComparer.OrdinalIgnoreCase);
+            // models and materials as the game reads them (a packed one is written plain)
+            foreach (string n in files.Keys.Where(n => n.EndsWith(".emo", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".emm", StringComparison.OrdinalIgnoreCase)).ToList())
+                files[n] = Unwrap(files[n]);
             foreach (string model in source.Names.Where(n => Model.IsMatch(n)).ToList())
             {
                 string fighter = model.Substring(0, 3).ToUpperInvariant(), stem = model.Substring(0, 6);
@@ -632,7 +915,7 @@ namespace ExMoreStuff
                     int bones = Align(data, stockPart);
                     if (bones > 0) { files[stem + part] = data; done.Add(stem + part + ": " + bones + " locator-chain bones set to the stand-in's (costume 01), the mesh moved with them"); }
                 }
-                string materials = FixMaterials(game, fighter, stem, files[model], files);
+                string materials = FixMaterials(game, fighter, stem, files);
                 if (materials != null) done.Add(stem + ": " + materials);
                 foreach (string part in new[] { ".shd.emo", ".nml.emb", ".bsr" })
                 {
@@ -643,8 +926,6 @@ namespace ExMoreStuff
                     done.Add(stem + part + ": missing, the game's costume 01's put in");
                 }
             }
-            string where = source.Where.TrimEnd('\\', '/');
-            target = target ?? (where.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? where.Substring(0, where.Length - 4) + " - fixed.zip" : where + " - fixed");
             bool zip = target.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
             if (zip)
             {
@@ -677,15 +958,18 @@ namespace ExMoreStuff
                 foreach (var f in r.Findings) t.AppendLine("    " + f.Kind.PadRight(8) + " " + f.Text + (f.Fixable ? "  [fixable]" : ""));
             }
             t.AppendLine();
-            t.AppendLine("Verdicts: FAULTY breaks in the game or desyncs online against a player without it; NOISE differs from the");
-            t.AppendLine("stand-in only at rounding level (plays the same, but not bit for bit); MIRROR is clean against costume 01 and");
-            t.AppendLine("differs from 02/03, the stand-ins in a mirror match; OK.");
+            t.AppendLine("Verdicts: FAULTY breaks in the game or desyncs online against a player without it; LOOK plays the same online,");
+            t.AppendLine("but parts of some colors draw white; NOISE differs from the stand-in only at rounding level (plays the same, but");
+            t.AppendLine("not bit for bit); MIRROR is clean against costume 01 and differs from 02/03, the stand-ins in a mirror match; OK.");
             t.AppendLine("DESYNC: a gameplay locator bone (hurtboxes, WAIST, LND, TRS) or a bone above it differs from the stand-in where");
             t.AppendLine("the animations leave it to the model. DESYNC?: a rotation IK may override. IK: the IK records of gameplay bones");
             t.AppendLine("differ (not fixed automatically). EFFECTS: only");
             t.AppendLine("effect locators differ (effects sit elsewhere on that PC; not a fault). Sizes: moved >= 0.001, small >= 0.0001,");
-            t.AppendLine("noise below. WHITE: a material the model uses is missing from a color. EMM>CAP: a color has more materials than");
-            t.AppendLine("the model takes. FILES / COLORS / SLOT: files or colors the game or Ember need are missing, or the slot isn't 08-99.");
+            t.AppendLine("noise below. WHITE: a material the model uses is missing from a color (several long-loved skins have it). EMM>CAP:");
+            t.AppendLine("a color has more materials than the model takes. FILES / COLORS / SLOT: files or colors the game or rollback games");   // ROLLBACK-NAME
+            t.AppendLine("need are missing, or the slot isn't 08-99. BROKEN: a part of the model points past the end of its file. PALETTE:");
+            t.AppendLine("more than 24 bones in one skin palette. SUBMESHES: more than 31 in one part. BROKEN, PALETTE and SUBMESHES close");
+            t.AppendLine("the game. UNREAD: the files couldn't be read, so the costume wasn't checked.");
             return t.ToString();
         }
     }

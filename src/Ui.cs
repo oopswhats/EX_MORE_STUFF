@@ -1511,7 +1511,7 @@ namespace ExMoreStuff
             this.wordmark = wordmark;
             System.Version v;
             this.version = System.Version.TryParse(version, out v) ? v.Major + "." + v.Minor : version;
-            Size = new Size(430, 268 + Notice);
+            Size = new Size(430, 292 + Notice);   // (+24: the thanks line, user 2026-10-23)
             var support = new FlatButton("Support") { Fill = KoFi, Font = Theme.Bold(12f), Location = new Point(Inset, 96) };
             support.Size = new Size(TextRenderer.MeasureText(support.Text, support.Font).Width + 40, 40);
             support.Click += (s, e) => { try { System.Diagnostics.Process.Start(SupportPage); } catch (Exception) { } };
@@ -1525,7 +1525,7 @@ namespace ExMoreStuff
             var link = new LinkLabel
             {
                 Text = "USF4 mods on GameBanana  \u203a", AutoSize = true, BackColor = Color.Transparent, Font = Theme.Bold(9f),
-                LinkColor = Theme.Accent, ActiveLinkColor = Color.White, LinkBehavior = LinkBehavior.HoverUnderline, Location = new Point(Inset - 2, 232 + Notice),
+                LinkColor = Theme.Accent, ActiveLinkColor = Color.White, LinkBehavior = LinkBehavior.HoverUnderline, Location = new Point(Inset - 2, 256 + Notice),
             };
             link.LinkClicked += (s, e) => { try { System.Diagnostics.Process.Start(GameBananaPage); } catch (Exception) { } };
             why.SetToolTip(link, WhyGameBanana);
@@ -1562,6 +1562,8 @@ namespace ExMoreStuff
                 Theme.Font(8f), Theme.Muted, new Rectangle(Inset, 146 + Notice, width, 34), flags | TextFormatFlags.WordBreak);
             Theme.Draw(g, "Costume pictures: rollback games' selection art (photos by Street Fighter Galleries, EventHubs and the Street Fighter Wiki). Game art © Capcom.",   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                 Theme.Font(8f), Theme.Muted, new Rectangle(Inset, 182 + Notice, width, 50), flags | TextFormatFlags.WordBreak);
+            // the people who helped (user 2026-10-23, their wording)
+            Theme.Draw(g, "Thanks to Katie, Tom and FRaccie for their help with EX More Stuff.", Theme.Font(9f), Theme.Text, new Rectangle(Inset, 232 + Notice, width, 20), flags);
         }
     }
 

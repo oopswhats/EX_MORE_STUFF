@@ -28,6 +28,10 @@ namespace ExMoreStuff
         const double FieldOfView = 24.0;
         public const double YawDegrees = 90.0;   // character select's turn: the fighter faces the camera in the stance
         const int Supersample = 3, ShadowSize = 2048;
+        public const int Colors = 12;   // 11 and 12 (color 1 in the game's two styles) for View... only: packages hold 01-10
+
+        // drawing takes half the PC's cores at most: the player's PC stays usable (and a game beside it)
+        static readonly ParallelOptions Cores = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2) };
 
         // ---------- the training stage (STG_TRN.emz TRN_SetupParam.lua) ----------
 
@@ -432,6 +436,18 @@ namespace ExMoreStuff
         static double[] Cross(double[] a, double[] b) { return new[] { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] }; }
         static double[] Norm(double[] v) { double n = Math.Sqrt(Dot(v, v)); return new[] { v[0] / n, v[1] / n, v[2] / n }; }
         static double Sat(double v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+        static void Normalize(double[] v) { double n = Math.Sqrt(Dot(v, v)); v[0] /= n; v[1] /= n; v[2] /= n; }
+        static void CrossInto(double[] a, double[] b, double[] o) { o[0] = a[1] * b[2] - a[2] * b[1]; o[1] = a[2] * b[0] - a[0] * b[2]; o[2] = a[0] * b[1] - a[1] * b[0]; }
+
+        // the pixel shader's working arrays, one set per drawing thread (none made a sample)
+        class Scratch
+        {
+            [ThreadStatic] static Scratch mine;
+            public static Scratch Get() { return mine ?? (mine = new Scratch()); }
+            public readonly double[] Out = new double[8], C = new double[4], Tap = new double[4], Nml = new double[4], Env = new double[4];
+            public readonly double[] P = new double[3], N = new double[3], View = new double[3], R = new double[3], A = new double[3], B = new double[3], T = new double[3], Bt = new double[3];
+            public readonly double[] Texel = new double[3], Shade = new double[3], Albedo = new double[3], Light = new double[3], Glow = new double[3], Lit = new double[3];
+        }
 
         // numpy's percentile (linear between the two nearest ranks)
         static double Percentile(List<double> sorted, double q)
@@ -442,9 +458,11 @@ namespace ExMoreStuff
         }
 
         /// <summary>The posed costume in one color as the training stage lights it: an RGBA picture `width` x `height`,
-        /// the fighter framed in it, transparent around them.</summary>
+        /// the fighter framed in it, transparent around them. supersample: samples across a pixel (3; 1 for a quick look), shadowSize:
+        /// the self-shadow map's.</summary>
         static float[] Picture(string game, string fighter, List<CostumePose.Part> parts, List<Texture> textures, Dictionary<string, Material> materials,
-                               List<Texture> normals, Dictionary<string, int> layers, int width, int height, int style, double yawDegrees)
+                               List<Texture> normals, Dictionary<string, int> layers, int width, int height, int style, double yawDegrees,
+                               int supersample = Supersample, int shadowSize = ShadowSize)
         {
             Stage stage = StageOf(game);
             double yaw = yawDegrees * Math.PI / 180, cy = Math.Cos(yaw), sy = Math.Sin(yaw);
@@ -501,7 +519,7 @@ namespace ExMoreStuff
             double[] ortho = { 1 / radius, 0, 0, 0, 0, 1 / radius, 0, 0, 0, 0, -1 / (2 * radius), -1, 0, 0, 0, 1 };
             double[] lightMvp = MatMul(ortho, lightView);
 
-            var shadow = new float[ShadowSize * ShadowSize];
+            var shadow = new float[shadowSize * shadowSize];
             for (int i = 0; i < shadow.Length; i++) shadow[i] = 1;
             var shadowDraws = new List<Tuple<int, int[]>>();
             for (int i = 0; i < parts.Count; i++)
@@ -511,9 +529,9 @@ namespace ExMoreStuff
                     if (sub.Triangles.Length > 0 && !(materials.TryGetValue(sub.Material, out m) && m.Blend)) shadowDraws.Add(Tuple.Create(i, sub.Triangles));
                 }
             var lightClip = frame.Pos.Select(pos => Enumerable.Range(0, pos.Length / 3).SelectMany(v => MulPoint(lightMvp, pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2])).ToArray()).ToArray();
-            Rasterize(ShadowSize, ShadowSize, shadowDraws.Count, d => lightClip[shadowDraws[d].Item1], d => shadowDraws[d].Item2,
-                      (d, x, y, z, b, tri) => { int at = y * ShadowSize + x; if (z < shadow[at]) shadow[at] = (float)z; });
-            var shadowMap = new ShadowMap { Depth = shadow };
+            Rasterize(shadowSize, shadowSize, shadowDraws.Count, d => lightClip[shadowDraws[d].Item1], d => shadowDraws[d].Item2,
+                      (d, x, y, z, b, tri) => { int at = y * shadowSize + x; if (z < shadow[at]) shadow[at] = (float)z; });
+            var shadowMap = new ShadowMap { Depth = shadow, Size = shadowSize };
 
             for (int i = 0; i < parts.Count; i++)
                 frame.Clip[i] = Enumerable.Range(0, frame.Pos[i].Length / 3).SelectMany(v => MulPoint(mvp, frame.Pos[i][v * 3], frame.Pos[i][v * 3 + 1], frame.Pos[i][v * 3 + 2])).ToArray();
@@ -549,7 +567,7 @@ namespace ExMoreStuff
             var partIndex = new Dictionary<CostumePose.Part, int>();
             for (int i = 0; i < parts.Count; i++) partIndex[parts[i]] = i;
 
-            int sw = width * Supersample, sh = height * Supersample;
+            int sw = width * supersample, sh = height * supersample;
             var color = new float[sw * sh * 4];
             var glare = new float[sw * sh * 4];
             var depth = new float[sw * sh];
@@ -562,12 +580,16 @@ namespace ExMoreStuff
                           Draw draw = draws[d];
                           if (z >= depth[at]) return;
                           int part = partIndex[draw.Part];
-                          var o = new double[8];
+                          double[] o = Scratch.Get().Out;
                           if (!ctx.Shade(draw, frame, part, tri, b, x, y, sw, sh, o)) return;
                           if (!draw.Blend)
                           {
                               depth[at] = (float)z;
                               for (int c = 0; c < 4; c++) { color[at * 4 + c] = (float)Sat(o[c]); glare[at * 4 + c] = (float)Sat(o[4 + c]); }
+                              // an opaque material covers its pixel whatever its texture's alpha: some skins leave the alpha
+                              // empty where they're opaque (user 2026-10-18: Terry Bogard as floating pieces), and the game
+                              // ignores it there (PerfTest.Solid does the same for the game's pictures)
+                              color[at * 4 + 3] = 1;
                           }
                           else
                           {
@@ -582,8 +604,8 @@ namespace ExMoreStuff
                           }
                       }, draws.Select(dr => dr.Cull).ToArray(), (d, tri) => ctx.Setup(draws[d], frame, partIndex[draws[d].Part], tri, sw, sh));
 
-            float[] image = Downscale(color, sw, sh, width, height);
-            float[] glareImage = BoxDown(glare, sw, sh, width, height);
+            float[] image = supersample > 1 ? Downscale(color, sw, sh, width, height) : color;   // one sample a pixel: as it is
+            float[] glareImage = supersample > 1 ? BoxDown(glare, sw, sh, width, height) : glare;
             image = AddGlare(image, glareImage, width, height, 2 * half / GameScreenHeight);
             for (int i = 0; i < width * height; i++)   // the stage's colour filter
                 for (int c = 0; c < 3; c++)
@@ -597,16 +619,18 @@ namespace ExMoreStuff
         class ShadowMap
         {
             public float[] Depth;
+            public int Size;
 
             // bilinear depth, clamped
             public double At(double u, double v)
             {
-                double x = u * ShadowSize - 0.5, y = v * ShadowSize - 0.5;
+                double x = u * Size - 0.5, y = v * Size - 0.5;
                 int x0 = (int)Math.Floor(x), y0 = (int)Math.Floor(y);
                 double fx = x - x0, fy = y - y0;
-                Func<int, int, double> d = (i, j) => Depth[Math.Min(Math.Max(j, 0), ShadowSize - 1) * ShadowSize + Math.Min(Math.Max(i, 0), ShadowSize - 1)];
-                return (d(x0, y0) * (1 - fx) + d(x0 + 1, y0) * fx) * (1 - fy) + (d(x0, y0 + 1) * (1 - fx) + d(x0 + 1, y0 + 1) * fx) * fy;
+                return (D(x0, y0) * (1 - fx) + D(x0 + 1, y0) * fx) * (1 - fy) + (D(x0, y0 + 1) * (1 - fx) + D(x0 + 1, y0 + 1) * fx) * fy;
             }
+
+            double D(int i, int j) { return Depth[Math.Min(Math.Max(j, 0), Size - 1) * Size + Math.Min(Math.Max(i, 0), Size - 1)]; }
         }
 
         // Triangles into a w x h target in bands of rows at once (each band draws every triangle in order, so blending
@@ -620,7 +644,7 @@ namespace ExMoreStuff
             if (setup != null)
                 for (int d = 0; d < drawCount; d++)
                     for (int t = 0; t < trianglesOf(d).Length / 3; t++) setup(d, t);
-            Parallel.For(0, bands, bi =>
+            Parallel.For(0, bands, Cores, bi =>
             {
                 int y0 = bi * band, y1 = Math.Min(h, y0 + band);
                 var b = new double[3];
@@ -705,14 +729,16 @@ namespace ExMoreStuff
                 double[] pos = f.Pos[part], nrm = f.Nrm[part], clip = f.Clip[part];
                 float[] uvs = draw.Part.Uvs;
                 double u = b[0] * uvs[i0 * 2] + b[1] * uvs[i1 * 2] + b[2] * uvs[i2 * 2], v = b[0] * uvs[i0 * 2 + 1] + b[1] * uvs[i1 * 2 + 1] + b[2] * uvs[i2 * 2 + 1];
-                var c = new double[4]; var scratch = new double[4];
+                Scratch sc = Scratch.Get();
+                double[] c = sc.C, scratch = sc.Tap;
                 double[][] tf = frames[draw][tri];
                 draw.Texture.Sample(u, v, Lod(draw.Texture, tf[4]), c, scratch);
                 if (c[3] < draw.Cut) return false;
                 Look look = draw.Look;
                 if (look.Special == Emission)   // Emission_PS: unlit, alpha 1
                 {
-                    double[] e = { c[0], c[1], c[2] };
+                    double[] e = sc.Texel;
+                    e[0] = c[0]; e[1] = c[1]; e[2] = c[2];
                     if (look.P1[0] > 0.5)   // EmissionNega_PS
                     {
                         double kx = Sat(c[3] * C95[0]), ky = Sat(c[3] * C95[1]);
@@ -736,10 +762,13 @@ namespace ExMoreStuff
                     o[3] = o[7] = c[3];
                     return true;
                 }
-                double[] p = { b[0] * pos[i0 * 3] + b[1] * pos[i1 * 3] + b[2] * pos[i2 * 3], b[0] * pos[i0 * 3 + 1] + b[1] * pos[i1 * 3 + 1] + b[2] * pos[i2 * 3 + 1], b[0] * pos[i0 * 3 + 2] + b[1] * pos[i1 * 3 + 2] + b[2] * pos[i2 * 3 + 2] };
-                double[] n = Norm(new[] { b[0] * nrm[i0 * 3] + b[1] * nrm[i1 * 3] + b[2] * nrm[i2 * 3], b[0] * nrm[i0 * 3 + 1] + b[1] * nrm[i1 * 3 + 1] + b[2] * nrm[i2 * 3 + 1], b[0] * nrm[i0 * 3 + 2] + b[1] * nrm[i1 * 3 + 2] + b[2] * nrm[i2 * 3 + 2] });
-                double[] view = Norm(Sub(Eye, p));
-                if (Dot(n, view) < 0) n = new[] { -n[0], -n[1], -n[2] };   // two-sided cloth and hair
+                double[] p = sc.P, n = sc.N, view = sc.View;
+                p[0] = b[0] * pos[i0 * 3] + b[1] * pos[i1 * 3] + b[2] * pos[i2 * 3]; p[1] = b[0] * pos[i0 * 3 + 1] + b[1] * pos[i1 * 3 + 1] + b[2] * pos[i2 * 3 + 1]; p[2] = b[0] * pos[i0 * 3 + 2] + b[1] * pos[i1 * 3 + 2] + b[2] * pos[i2 * 3 + 2];
+                n[0] = b[0] * nrm[i0 * 3] + b[1] * nrm[i1 * 3] + b[2] * nrm[i2 * 3]; n[1] = b[0] * nrm[i0 * 3 + 1] + b[1] * nrm[i1 * 3 + 1] + b[2] * nrm[i2 * 3 + 1]; n[2] = b[0] * nrm[i0 * 3 + 2] + b[1] * nrm[i1 * 3 + 2] + b[2] * nrm[i2 * 3 + 2];
+                Normalize(n);
+                for (int k = 0; k < 3; k++) view[k] = Eye[k] - p[k];
+                Normalize(view);
+                if (Dot(n, view) < 0) { n[0] = -n[0]; n[1] = -n[1]; n[2] = -n[2]; }   // two-sided cloth and hair
                 if (draw.Hatch != 0)
                 {
                     double hv = Sat(Dot(n, view));
@@ -758,17 +787,21 @@ namespace ExMoreStuff
                 }
                 if (draw.Normals != null)   // tex2D(s1) * 2 - 1 in the tangent frame from the derivatives
                 {
-                    double[] t = Add(Scale(Cross(tf[1], n), tf[2][0]), Scale(Cross(n, tf[0]), tf[3][0]));
-                    double[] bt = Add(Scale(Cross(tf[1], n), tf[2][1]), Scale(Cross(n, tf[0]), tf[3][1]));
+                    double[] e1 = sc.A, e2 = sc.B, t = sc.T, bt = sc.Bt;
+                    CrossInto(tf[1], n, e1); CrossInto(n, tf[0], e2);
+                    for (int k = 0; k < 3; k++) { t[k] = e1[k] * tf[2][0] + e2[k] * tf[3][0]; bt[k] = e1[k] * tf[2][1] + e2[k] * tf[3][1]; }
                     double s = 1 / Math.Sqrt(Math.Max(Dot(t, t), Dot(bt, bt)) + 1e-20);
-                    var m = new double[4];
+                    double[] m = sc.Nml;
                     draw.Normals.Sample(u, v, Lod(draw.Normals, tf[4]), m, scratch);
                     double mx = m[0] * 2 - 1, my = m[1] * 2 - 1, mz = m[2] * 2 - 1;
-                    n = Norm(new[] { t[0] * s * mx + bt[0] * s * my + n[0] * mz, t[1] * s * mx + bt[1] * s * my + n[1] * mz, t[2] * s * mx + bt[2] * s * my + n[2] * mz });
+                    double n0 = t[0] * s * mx + bt[0] * s * my + n[0] * mz, n1 = t[1] * s * mx + bt[1] * s * my + n[1] * mz, n2 = t[2] * s * mx + bt[2] * s * my + n[2] * mz;
+                    n[0] = n0; n[1] = n1; n[2] = n2;
+                    Normalize(n);
                 }
                 double ndl = Dot(n, L0), ndv = Sat(Dot(n, view));
                 double alpha = draw.Blend ? c[3] : 1;
-                double[] texel = { c[0], c[1], c[2] }, shade = { 1, 1, 1 };
+                double[] texel = sc.Texel, shade = sc.Shade;
+                for (int k = 0; k < 3; k++) { texel[k] = c[k]; shade[k] = 1; }
                 if (look.Special == Nega)   // SpcBumpBrushNega_PS
                 {
                     double kx = Sat(8 * (C95[0] - c[3]) - 7), ky = Sat(8 * (C95[1] - c[3]) - 7), sh = 1 - kx, zz = ky * (1 - 2 * sh) + sh;
@@ -784,9 +817,10 @@ namespace ExMoreStuff
                     for (int j = 0; j < 3; j++) texel[j] = c[j] * (1 + k * (look.P0[j] - 1));
                     if (draw.Blend) alpha = c[3] + (1 - c[3]) * k;
                 }
-                else if (look.Special == ColorShadow) shade = new[] { look.P0[0] * look.P0[3], look.P0[1] * look.P0[3], look.P0[2] * look.P0[3] };
+                else if (look.Special == ColorShadow) for (int k = 0; k < 3; k++) shade[k] = look.P0[k] * look.P0[3];
                 double[] brush = draw.Brush, rimColor = draw.RimColor;
-                var albedo = (double[])texel.Clone();
+                double[] albedo = sc.Albedo;
+                for (int k = 0; k < 3; k++) albedo[k] = texel[k];
                 if (look.RimKind == RimBrush)
                 {
                     double bb = Sat(brush[0] * ndl - brush[1]), rim = Sat(brush[2] * (1 - ndv) - brush[3] - ndl) * rimColor[3];
@@ -802,9 +836,11 @@ namespace ExMoreStuff
                 // the key light with self-shadow, hemisphere ambient, the second light, specular
                 double lit = draw.Shadowed ? Lit(p) : 1;
                 double hy = n[1], ndl1 = Sat(Dot(n, L1));
-                double[] r = Sub(Scale(n, 2 * Dot(n, view)), view);
+                double[] r = sc.R;
+                double twice = 2 * Dot(n, view);
+                for (int k = 0; k < 3; k++) r[k] = n[k] * twice - view[k];
                 double spec = Math.Pow(Sat(Dot(L0, r)), draw.MatSpec[1]) * draw.MatSpec[0] * c[3] * lit;
-                var lc = new double[3];
+                double[] lc = sc.Light;
                 for (int k = 0; k < 3; k++)
                 {
                     double ambient = (hy * hy * HemiA[k] + hy * HemiB[k] + HemiC[k]) * draw.MatAmb[k] + Dif1[k] * draw.MatDif[k] * ndl1;
@@ -812,7 +848,8 @@ namespace ExMoreStuff
                     double diffuse = Dif0[k] * draw.MatDif[k] * Sat(ndl) * (SelfShadow[k] + (1 - SelfShadow[k]) * lit) + ambient;
                     lc[k] = diffuse;
                 }
-                var glow = new double[3];
+                double[] glow = sc.Glow;
+                glow[0] = glow[1] = glow[2] = 0;
                 if (look.Special == Emi)   // SpcBumpBrushEmi*_PS
                 {
                     if (look.P1[1] > 0.5) for (int k = 0; k < 3; k++) albedo[k] += (albedo[k] * albedo[k] - albedo[k]) * (1 - ndv);
@@ -830,14 +867,14 @@ namespace ExMoreStuff
                     double fres = Sat(look.P0[0] * Sat((1 - ndv) * look.P0[2] - (look.P0[2] - 1)) + look.P0[1]);
                     for (int k = 0; k < 3; k++) albedo[k] += oil[k] * fres * C95[0];
                 }
-                var lit3 = new double[3];
+                double[] lit3 = sc.Lit;
                 for (int k = 0; k < 3; k++) lit3[k] = albedo[k] * lc[k] + spec * Spc0[k] * draw.MatSpc[k] + glow[k];
                 if (look.Special == Env && Cube != null)   // lerp to the stage's cube map by a fresnel weight
                 {
                     double ff = (1 - ndv) * look.P0[2] - (look.P0[2] - 1);
                     double wgt = look.P1[0] == 3 ? Sat(look.P0[0] * ff + look.P0[1]) : Sat(look.P0[0] * (Sat(ff) + look.P0[1]));
                     double[] dir = Back(r);
-                    var e = new double[4];
+                    double[] e = sc.Env;
                     CubeSample(Cube, dir[0], dir[1], dir[2], e);
                     double ea = Math.Max(e[3], 1.0 / 255);
                     double mixw = look.P1[0] == 1 ? wgt : wgt * c[3];
@@ -857,15 +894,18 @@ namespace ExMoreStuff
             // SamplerShadowMap s7: four taps +-1/1024, depth bias 0.012, averaged
             double Lit(double[] p)
             {
-                double[] s = MulPoint(LightMvp, p[0], p[1], p[2]);
-                double x = s[0] / s[3] * 0.5 + 0.5, y = s[1] / s[3] * 0.5 + 0.5, z = s[2] / s[3] * 0.5 + 0.5;
+                double[] m = LightMvp;
+                double s0 = m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3], s1 = m[4] * p[0] + m[5] * p[1] + m[6] * p[2] + m[7];
+                double s2 = m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11], s3 = m[12] * p[0] + m[13] * p[1] + m[14] * p[2] + m[15];
+                double x = s0 / s3 * 0.5 + 0.5, y = s1 / s3 * 0.5 + 0.5, z = s2 / s3 * 0.5 + 0.5;
                 // the map's rows run from the top (window rows down), its v from the bottom
                 double lit = 0;
-                double[][] taps = { new[] { 1.0, 0 }, new[] { -1.0, 0 }, new[] { 0, 1.0 }, new[] { 0, -1.0 } };
-                foreach (double[] t in taps)
+                foreach (double[] t in Taps)
                     if (z - 0.012 * 0.5 <= Shadow.At(x + t[0] / 1024, 1 - (y + t[1] / 1024))) lit += 0.25;
                 return lit;
             }
+
+            static readonly double[][] Taps = { new[] { 1.0, 0 }, new[] { -1.0, 0 }, new[] { 0, 1.0 }, new[] { 0, -1.0 } };
 
             // Hatching_PS's tone: the four stroke directions of the tonal art map weighted by the object-space normal,
             // banded by NdotV
@@ -956,7 +996,7 @@ namespace ExMoreStuff
             int ow = horizontal ? size : sw, oh = horizontal ? sh : size;
             var dst = new float[ow * oh * 4];
             Func<double, double> sinc = x => x == 0 ? 1 : Math.Sin(Math.PI * x) / (Math.PI * x);
-            Parallel.For(0, size, i =>
+            Parallel.For(0, size, Cores, i =>
             {
                 double center = (i + 0.5) * scale;
                 int from = Math.Max(0, (int)(center - support + 0.5)), to = Math.Min(n, (int)(center + support + 0.5));
@@ -1124,21 +1164,34 @@ namespace ExMoreStuff
                 byte[] emo = read(stem + ".obj.emo");
                 string ema = CostumePose.GameFile(game, fighter, fighter + ".obj.ema");
                 try { parts = ema != null ? CostumePose.Posed(emo, File.ReadAllBytes(ema), read(stem + ".bsr"), fighter, animation, frame, mirror) : CostumePose.ReadEmo(emo, fighter); }
-                catch (Exception) { parts = CostumePose.ReadEmo(emo, fighter); }   // ponytail: the stance failed; the model as it's made
+                // ponytail: the stance failed; the model as it's made. A damaged skeleton isn't drawn at all (its error)
+                catch (Exception ex) when (!(ex is CostumePose.Damaged)) { parts = CostumePose.ReadEmo(emo, fighter); }
             }
 
             /// <summary>Color 1-12 as the training stage lights it, `width` x `height`, transparent around the fighter, turned
-            /// `yaw` degrees; null when the color has no textures. 11 and 12 are color 1 in the game's two styles.</summary>
-            public Bitmap Draw(int color, int width = 600, int height = 800, double yaw = YawDegrees)
+            /// `yaw` degrees; null when the color has no textures. 11 and 12 are color 1 in the game's two styles. quick: one
+            /// sample a pixel and a smaller shadow map (a look while the viewer's controls move), several times cheaper.</summary>
+            public Bitmap Draw(int color, int width = 600, int height = 800, double yaw = YawDegrees, bool quick = false)
             {
                 int style = color == 11 || color == 12 ? color : 0;
                 string cc = stem + "_" + (style != 0 ? 1 : color).ToString("D2");
-                byte[] col = read(cc + ".col.emb");
-                if (col == null) return null;
-                var textures = GameArt.ReadContainer(col).Select(e => Decode(e.Value)).ToList();
-                byte[] emm = read(cc + ".obj.emm") ?? read(stem + ".obj.emm") ?? GameBytes(stem + ".obj.emm") ?? GameBytes(stem + "_01.obj.emm");
-                return ToBitmap(Picture(game, fighter, parts, textures, ReadEmm(emm), normals, layers, width, height, style, yaw), width, height);
+                if (cc != shownColor)   // the last color's textures kept: the viewer draws it again and again as it turns
+                {
+                    shownColor = null; shownTextures = null; shownMaterials = null;
+                    byte[] col = read(cc + ".col.emb");
+                    if (col == null) return null;
+                    shownTextures = GameArt.ReadContainer(col).Select(e => Decode(e.Value)).ToList();
+                    byte[] emm = read(cc + ".obj.emm") ?? read(stem + ".obj.emm") ?? GameBytes(stem + ".obj.emm") ?? GameBytes(stem + "_01.obj.emm");
+                    shownMaterials = ReadEmm(emm);
+                    shownColor = cc;
+                }
+                return ToBitmap(Picture(game, fighter, parts, shownTextures, shownMaterials, normals, layers, width, height, style, yaw,
+                                        quick ? 1 : Supersample, quick ? ShadowSize / 2 : ShadowSize), width, height);
             }
+
+            string shownColor;
+            List<Texture> shownTextures;
+            Dictionary<string, Material> shownMaterials;
 
             byte[] GameBytes(string name)
             {
