@@ -989,7 +989,14 @@ namespace ExMoreStuff
                 int h = 0x20 + I32(d, 0x28 + i * 4) + 0x20;
                 int texCount = I32(d, h + 4), texList = I32(d, h + 12), vCount = U16(d, h + 16), vSize = U16(d, h + 18), vOff = I32(d, h + 20);
                 int strip = U16(d, h + 24), subCount = U16(d, h + 26), subList = I32(d, h + 28);
-                var texIds = Enumerable.Range(0, texCount).Select(t => (int)d[h + I32(d, h + texList + t * 4) + 5]).ToArray();
+                // a slot pointing past the end reads as texture 0 (Raiden for Bison's cape: 6 slots listed, 1 real)
+                var texIds = Enumerable.Range(0, texCount).Select(t =>
+                {
+                    int at = h + texList + t * 4;
+                    if (at < 0 || at + 4 > d.Length) return 0;
+                    long e = (long)h + I32(d, at) + 5;
+                    return e >= 0 && e < d.Length ? (int)d[e] : 0;
+                }).ToArray();
                 var part = new Part { Positions = new double[vCount * 3], Normals = new double[vCount * 3], Uvs = new float[vCount * 2], Bones = new byte[vCount * 4], Weights = new double[vCount * 3] };
                 bool skinned = vSize >= 64;
                 for (int v = 0; v < vCount; v++)

@@ -57,11 +57,19 @@ namespace ExMoreStuff
         // The file a stage is copied from: a game stage's own, as the game shipped it (resource\battle\stage, never a
         // port or replacement in the patch folder), a custom stage's as installed. Since the game's own files are
         // never changed, replacements can't build on each other: Pit Stop 109 <-> Training Stage is a clean swap.
+        // Ultra's stages (DET, ELV, HFP, MAD, BFU, JUR) are only in dlc\04_ae2 on a clean install (Tom 2026-10-24: "I still
+        // can't change the stage of Ultra version stages ... with a clean install").
+        static readonly string[] GameRoots = { "resource", @"dlc\04_ae2", @"dlc\03_character_free" };
+
         public static string SourceFile(string game, string code, string suffix)
         {
             if (Array.IndexOf(Stages.Codes, code) < 0) return StagePack.GameFile(game, code, suffix, false);
-            string path = Path.Combine(game, "resource", StagePack.RelativePath(code, suffix));
-            return File.Exists(path) ? path : null;
+            foreach (string root in GameRoots)
+            {
+                string path = Path.Combine(game, root, StagePack.RelativePath(code, suffix));
+                if (File.Exists(path)) return path;
+            }
+            return null;
         }
 
         // Why `stage` can't play as `source` (or null; with no source, whether the stage can be replaced at all): their

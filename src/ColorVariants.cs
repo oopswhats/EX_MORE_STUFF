@@ -172,11 +172,25 @@ namespace ExMoreStuff
                 int entry = table + i * 8;
                 if (entry + 8 > col.Length) break;
                 int start = BitConverter.ToInt32(col, entry) + entry, length = BitConverter.ToInt32(col, entry + 4);
-                if (start < 0 || length < 128 || start + length > col.Length || Encoding.ASCII.GetString(col, start, 4) != "DDS ") { looks.Add(new byte[0]); continue; }
+                if (start < 0 || length < 128 || start + length > col.Length || Encoding.ASCII.GetString(col, start, 4) != "DDS ")
+                {
+                    looks.Add(start >= 0 && length > 0 && start + length <= col.Length ? Raw(col, start, length) : new byte[0]);
+                    continue;
+                }
                 int height = BitConverter.ToInt32(col, start + 12), width = BitConverter.ToInt32(col, start + 16);
                 string fourcc = Encoding.ASCII.GetString(col, start + 84, 4);
                 int block = fourcc == "DXT1" ? 8 : fourcc == "DXT3" || fourcc == "DXT5" ? 16 : 0, blocks = ((width + 3) / 4) * ((height + 3) / 4);
-                if (block == 0 || start + 128 + blocks * block > start + length) { looks.Add(new byte[0]); continue; }
+                if (block == 0 || start + 128 + blocks * block > start + length)
+                {
+                    // not a DXT texture (uncompressed ones, as most of Guy Ryu Hayabusa's): its bytes as they are, the top
+                    // level of an uncompressed one, so a change still counts (2026-10-25: they were all left empty, so
+                    // they always "looked the same", and 4 of that skin's colors were taken for copies and made patterns)
+                    int bits = BitConverter.ToInt32(col, start + 88);
+                    bool plain = (BitConverter.ToInt32(col, start + 80) & 0x40) != 0 && (bits == 32 || bits == 24) && width > 0 && height > 0;
+                    long top = plain ? (long)width * height * (bits / 8) : length - 128;
+                    looks.Add(Raw(col, start + 128, (int)Math.Min(top, length - 128)));
+                    continue;
+                }
                 var rgba = new byte[blocks * 16 * 4];
                 var palette = new int[4, 3];
                 var alphas = new int[8];
@@ -238,6 +252,14 @@ namespace ExMoreStuff
                 if (changed * 200L > pixels || difference > 2L * x.Length) return false;
             }
             return true;
+        }
+
+        // `count` bytes from `at`, whole groups of 4 (LookSame compares 4 bytes at a time)
+        static byte[] Raw(byte[] d, int at, int count)
+        {
+            var raw = new byte[Math.Max(0, count) / 4 * 4];
+            Array.Copy(d, at, raw, 0, raw.Length);
+            return raw;
         }
 
         static void Unpack(int c, int[,] palette, int k)

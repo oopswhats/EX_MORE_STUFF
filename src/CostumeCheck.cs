@@ -289,7 +289,9 @@ namespace ExMoreStuff
                 Need(d, (long)b + list + t * 4L, 4, where + "'s texture list runs past the end");
                 long tp = (long)b + I32(d, b + list + t * 4);
                 Need(d, tp, 4, where + "'s texture slot " + t + " is past the end");
-                int layers = I32(d, (int)tp);
+                // the layer count is the record's first 16 bits: some exporters leave a number in the next two bytes
+                // (Alpha Cammy's 02 00 01 00, read whole as 65538 layers, flagged a model that plays fine; Tom 2026-10-24)
+                int layers = U16(d, (int)tp);
                 if (layers < 0 || layers > 64) throw new InvalidDataException(where + "'s texture slot " + t + " has " + layers + " layers");
                 Need(d, tp + 4, layers * 12L, where + "'s texture slot " + t + " runs past the end");
             }

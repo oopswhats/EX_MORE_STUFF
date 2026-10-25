@@ -279,12 +279,16 @@ namespace ExMoreStuff
             // the game finds materials whatever the case
             var materials = new Dictionary<string, Material>(StringComparer.OrdinalIgnoreCase);
             if (d == null || d.Length < 16 || Encoding.ASCII.GetString(d, 0, 4) != "#EMM") return materials;
+            // read as far as the file goes: some skins' files are cut short (2026-10-25: SF5 Inspired Cammy's last material
+            // ends 40 bytes past the end, and the costume wasn't drawn at all); the game plays them
             int b = BitConverter.ToInt32(d, 0x0C);
-            for (int i = 0; i < BitConverter.ToInt32(d, b); i++)
+            if (b < 0 || b + 4 > d.Length) return materials;
+            for (int i = 0; i < BitConverter.ToInt32(d, b) && b + 8 + 4 * i <= d.Length; i++)
             {
-                int m = b + BitConverter.ToInt32(d, b + 4 + 4 * i);
+                int offset = BitConverter.ToInt32(d, b + 4 + 4 * i), m = b + offset;
+                if (offset <= 0 || m + 68 > d.Length) continue;
                 var mat = new Material { Shader = Name(d, m + 32) };
-                for (int k = 0; k < BitConverter.ToUInt16(d, m + 64); k++)
+                for (int k = 0; k < BitConverter.ToUInt16(d, m + 64) && m + 68 + 40 * (k + 1) <= d.Length; k++)
                 {
                     int p = m + 68 + 40 * k;   // name[32], type (1 = int), value
                     mat.Params[Name(d, p)] = BitConverter.ToUInt16(d, p + 32) == 1 ? BitConverter.ToUInt32(d, p + 36) : (double)BitConverter.ToSingle(d, p + 36);
@@ -316,8 +320,11 @@ namespace ExMoreStuff
                 var entries = new int?[texCount];
                 for (int t = 0; t < texCount; t++)
                 {
+                    // a slot pointing past the end is skipped (Raiden for Bison's cape lists 6 slots, 1 real; it uses that one)
+                    if (h + texList + t * 4 + 4 > d.Length) break;
                     int e = h + BitConverter.ToInt32(d, h + texList + t * 4);
-                    if (BitConverter.ToInt32(d, e) > 1) entries[t] = d[e + 4 + 12 + 1];
+                    if (e < 0 || e + 4 + 12 + 2 > d.Length) continue;
+                    if (BitConverter.ToUInt16(d, e) > 1) entries[t] = d[e + 4 + 12 + 1];
                 }
                 for (int s = 0; s < subCount; s++)
                 {
