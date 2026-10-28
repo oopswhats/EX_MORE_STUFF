@@ -49,7 +49,7 @@ namespace ExMoreStuff
                 if (!m.Success) continue;
                 string fighter = m.Groups[1].Value.ToUpperInvariant();
                 int costume = int.Parse(m.Groups[2].Value), number = int.Parse(m.Groups[3].Value);
-                if (!Fighters.IsCode(fighter) || costume < 1 || number < Catalog.FirstCustomColor || number > Catalog.LastColor) continue;
+                if (!Fighters.IsCode(fighter) || costume < 1 || number < Catalog.FirstColor(costume) || number > Catalog.LastColor) continue;
                 NewColor c = colors.FirstOrDefault(x => x.Fighter == fighter && x.Costume == costume && x.Number == number);
                 if (c == null) colors.Add(c = new NewColor { Fighter = fighter, Costume = costume, Number = number });
                 string kind = m.Groups[4].Value.ToLowerInvariant();
@@ -59,7 +59,7 @@ namespace ExMoreStuff
         }
 
         /// <summary>Color `wanted` of a costume, or when a package of EX More Stuff's (or a file it didn't put there) has it,
-        /// the first free one from 30 up; 0 when none is left.</summary>
+        /// the first free one from 30 up (11 on a custom costume); 0 when none is left.</summary>
         public static int FreeColor(string game, string fighter, int costume, int wanted, ICollection<int> alsoTaken = null)
         {
             var taken = new HashSet<int>(Installer.Load(game).Concat(Installer.Removed(game)).Concat(Docked.Load())
@@ -67,8 +67,8 @@ namespace ExMoreStuff
             if (alsoTaken != null) taken.UnionWith(alsoTaken);   // numbers given to the same pack's other colors
             Func<int, bool> free = n => !taken.Contains(n) && !File.Exists(Path.Combine(Game.PatchFolder(game), "battle", "chara", fighter,
                 fighter + "_" + costume.ToString("D2") + "_" + n.ToString("D2") + ".col.emb"));
-            if (wanted >= Catalog.FirstCustomColor && wanted <= Catalog.LastColor && free(wanted)) return wanted;
-            for (int n = Catalog.FirstCustomColor; n <= Catalog.LastColor; n++) if (free(n)) return n;
+            if (wanted >= Catalog.FirstColor(costume) && wanted <= Catalog.LastColor && free(wanted)) return wanted;
+            for (int n = Catalog.FirstColor(costume); n <= Catalog.LastColor; n++) if (free(n)) return n;
             return 0;
         }
 
@@ -189,7 +189,8 @@ namespace ExMoreStuff
         /// <summary>Installs what a downloaded mod file holds, each costume and stage in a personal slot or code. `id`
         /// names where it came from ("deviantart:123", or null: the file itself), so installing it again updates it in
         /// place. `say` reports progress.</summary>
-        public static Result Install(string game, string path, string id, string name, string author, string where, byte[] picture, Action<string> say)
+        public static Result Install(string game, string path, string id, string name, string author, string where, byte[] picture, Action<string> say,
+                                     bool check = false)
         {
             if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
             string patch = Game.PatchFolder(game);
@@ -197,7 +198,7 @@ namespace ExMoreStuff
             say("Unpacking " + Path.GetFileName(path) + "...");
             var files = GameBanana.Unpack(path, Path.Combine(patch, "ex_more_stuff.unpack"));
             return InstallFiles(game, files, id ?? "file:" + Md5(path).Substring(0, 16), string.IsNullOrWhiteSpace(name) ? NameFrom(path) : name,
-                                author, where ?? " (" + Path.GetFileName(path) + ")", picture, say);
+                                author, where ?? " (" + Path.GetFileName(path) + ")", picture, say, check: check);
         }
 
         // A package an earlier dock of this mod built (named as InstallFiles names them: "<name> - <code>.zip"), not in the
@@ -228,14 +229,14 @@ namespace ExMoreStuff
         /// there", the zip they added, as their costume packages are): its files converted in place, so the picture and code
         /// changes go into it and it's the file to upload. A mod that makes several, or a .rar or .7z (not written), gets
         /// copies in Mods\ as Install builds them. Into: what was docked ("stage U03"); Problems: what wasn't.</summary>
-        public static Result Dock(string game, string path, Action<string> say)
+        public static Result Dock(string game, string path, Action<string> say, bool check = false)
         {
             string patch = Game.PatchFolder(game);
             Directory.CreateDirectory(patch);
             say("Unpacking " + Path.GetFileName(path) + "...");
             var files = GameBanana.Unpack(path, Path.Combine(patch, "ex_more_stuff.unpack"));
             var built = new List<string>();
-            var result = InstallFiles(game, files, "file:" + Md5(path).Substring(0, 16), NameFrom(path), null, " (" + Path.GetFileName(path) + ")", null, say, dock: built.Add);
+            var result = InstallFiles(game, files, "file:" + Md5(path).Substring(0, 16), NameFrom(path), null, " (" + Path.GetFileName(path) + ")", null, say, dock: built.Add, check: check);
             if (built.Count == 1 && path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
             {
                 try
@@ -253,8 +254,10 @@ namespace ExMoreStuff
         /// <summary>The same with a mod's files already unpacked (paths as "file/folder/name"); `where` says where it came
         /// from, for its description (" on GameBanana (page)").</summary>
         public static Result InstallFiles(string game, IList<KeyValuePair<string, byte[]>> files, string id, string name, string author, string where, byte[] picture, Action<string> say,
-                                          string version = "", Func<string, string> sharedStage = null, Action<string> dock = null)
+                                          string version = "", Func<string, string> sharedStage = null, Action<string> dock = null,
+                                          bool check = false)
         {
+            // check: each costume built gets the costume check (InstallCheck): fixed, or switched off and locked
             // dock: each package built goes to it (docked for edits, user 2026-10-14: "its saying i cant dock this stage")
             // instead of into the game, which then can stay open; music and override stages go straight into the game, so
             // they're left out
@@ -321,13 +324,31 @@ namespace ExMoreStuff
                     Picture = "", Download = "", Sha256 = "",
                 };
                 say("Putting " + name + " in as " + Fighters.Name(costume.Fighter) + " " + slot.ToString("D2") + "...");
+                string seat = Fighters.Name(costume.Fighter) + " " + slot.ToString("D2");
+                // built beside it first: an older version's zip stays as it is if this one isn't wanted
+                string fresh = zip.Substring(0, zip.Length - 4) + " (new).zip", said = null;
                 try
                 {
-                    SkinImport.Build(game, costume, slot, picture, zip);
-                    if (dock != null) dock(zip); else Installer.InstallPackage(game, item, zip, "file");
-                    result.Into.Add(Fighters.Name(costume.Fighter) + " " + slot.ToString("D2"));
+                    SkinImport.Build(game, costume, slot, picture, fresh);
+                    string warning = null;
+                    if (check) InstallCheck.Decide(game, fresh, true, out said, out warning);   // fixed in EX More Stuff's own zip
+                    File.Copy(fresh, zip, true);
+                    if (dock != null) dock(zip);
+                    else
+                    {
+                        Installer.InstallPackage(game, item, zip, "file");
+                        InstallCheck.SetWarning(item.Key, warning);
+                        if (warning != null)
+                        {
+                            Installer.Remove(game, item.Key);   // it can't be fixed: switched off and locked
+                            result.Problems.Add(seat + " is switched off: it has problems that can't be fixed (see " + InstallCheck.ListButton + ")");
+                            continue;
+                        }
+                    }
+                    result.Into.Add(seat + (said != null ? " (" + said + ")" : ""));
                 }
                 catch (Exception ex) { result.Problems.Add(Fighters.Name(costume.Fighter) + ": " + ex.Message); }
+                finally { try { File.Delete(fresh); } catch (Exception) { } }
             }
             if (dock != null && music.Count > 0) { result.Problems.Add("its music isn't docked (music goes straight into the game): add it without docking for that"); music.Clear(); }
             foreach (var m in music)
@@ -359,7 +380,7 @@ namespace ExMoreStuff
                     string itemId = id + ":" + color.Fighter + color.Costume.ToString("D2") + "_" + color.Number.ToString("D2");
                     Installed again = records.FirstOrDefault(r => r.Item.Id == itemId);
                     int number = again != null ? again.Item.Color : FreeColor(game, color.Fighter, color.Costume, color.Number, numbers);
-                    if (number == 0) { result.Problems.Add(color.Describe + ": colors " + Catalog.FirstCustomColor + "-" + Catalog.LastColor + " are all in use"); continue; }
+                    if (number == 0) { result.Problems.Add(color.Describe + ": colors " + Catalog.FirstColor(color.Costume) + "-" + Catalog.LastColor + " are all in use"); continue; }
                     byte[] emm = color.Emm ?? CostumeFile(game, color.Fighter, color.Fighter + "_" + color.Costume.ToString("D2") + "_01.obj.emm");
                     if (emm == null) { result.Problems.Add(color.Describe + ": it has no material (.obj.emm) and the costume's color 1 has none to lend"); continue; }
                     numbers.Add(number);

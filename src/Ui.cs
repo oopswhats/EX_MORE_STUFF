@@ -1711,4 +1711,41 @@ namespace ExMoreStuff
             base.Dispose(disposing);
         }
     }
+
+    // A long read in its own window: a heading, a line about it, the text (scrollable, can be copied) and Close
+    // (the footer's switched-off costumes, MainForm.ShowLockedCostumes)
+    class TextWindow : Form
+    {
+        public TextWindow(string heading, string about, string text)
+        {
+            Text = heading;
+            Font = Theme.Font(9f);
+            BackColor = Theme.Base;
+            ForeColor = Theme.Text;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = MinimizeBox = false;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            const int width = 620, pad = 22;
+            int aboutHeight = TextRenderer.MeasureText(about, Theme.Font(9.5f), new Size(width - 2 * pad, 0), TextFormatFlags.WordBreak).Height + 4;
+            var title = new Label { Text = heading, AutoSize = false, BackColor = Color.Transparent, Font = Theme.Bold(13f), ForeColor = Theme.Text, Bounds = new Rectangle(pad, 18, width - 2 * pad, 30) };
+            var line = new Label { Text = about, AutoSize = false, BackColor = Color.Transparent, Font = Theme.Font(9.5f), ForeColor = Theme.Muted, Bounds = new Rectangle(pad, 54, width - 2 * pad, aboutHeight) };
+            var box = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.FixedSingle, BackColor = Theme.Well, ForeColor = Theme.Text,
+                                    Font = Theme.Font(9.5f), Text = text.Replace("\n", "\r\n"), Bounds = new Rectangle(pad, line.Bottom + 10, width - 2 * pad, 320) };
+            var close = new FlatButton("Close", true);
+            close.Location = new Point(width - pad - close.Width, box.Bottom + 14);
+            close.Click += (s, e) => Close();
+            ClientSize = new Size(width, close.Bottom + 18);
+            Controls.AddRange(new Control[] { title, line, box, close });
+            Shown += (s, e) => { box.SelectionStart = 0; box.SelectionLength = 0; close.Focus(); };
+        }
+
+        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Theme.DarkTitleBar(Handle); }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keys)
+        {
+            if (keys == Keys.Escape || keys == Keys.Enter) { Close(); return true; }
+            return base.ProcessCmdKey(ref msg, keys);
+        }
+    }
 }

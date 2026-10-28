@@ -49,7 +49,7 @@ namespace ExMoreStuff
             }
             else if (item.IsColor)
             {
-                if (slot < Catalog.FirstCustomColor || slot > Catalog.LastColor) return "a new color is " + Catalog.FirstCustomColor + " to " + Catalog.LastColor;
+                if (slot < Catalog.FirstColor(item.Slot) || slot > Catalog.LastColor) return "a new color is " + Catalog.FirstColor(item.Slot) + " to " + Catalog.LastColor;
                 if (slot == item.Color) return "that's its color already";
             }
             else

@@ -143,6 +143,7 @@ namespace ExMoreStuff
                                                packs.Select(p => PackPicture(p)).ToArray(), packs.Select(p => p.Item.Color).ToArray(), width, false) { Margin = new Padding(8, 4, 8, 4) };
                     pack.Make.Click += async (s, e) => await MakePack(packs, pack.Colors);
                     pack.FullSizeAsked += async color => await MakePackFullSize(packs.First(p => p.Item.Color == color));
+                    pack.MakeBanner.Click += (s, e) => OpenPackBanner(packs);
                     pack.Busy = working;
                     rows.Add(pack);
                     continue;
@@ -155,6 +156,7 @@ namespace ExMoreStuff
                 row.Check.Click += async (s, e) => await RunCheck(() => CostumeCheck.Find(r.Package), Weight.Name(r));
                 row.Check.Enabled = !checking;
                 row.View.Click += (s, e) => View(r);
+                row.MakeBanner.Click += (s, e) => OpenBanner(r);
                 row.ForceAsked += async color => await ForceDebug(r, color);
                 row.Busy = working;
                 rows.Add(row);
@@ -164,6 +166,49 @@ namespace ExMoreStuff
             while (list.Controls.Count > keep) { Control c = list.Controls[keep]; list.Controls.RemoveAt(keep); c.Dispose(); }
             foreach (Control c in rows) { list.Controls.Add(c); list.SetFlowBreak(c, true); }
             list.ResumeLayout();
+        }
+
+        // The banner maker (user 2026-10-27): every color picture the package has (<prefix>_01.png ... _99.png), laid out on
+        // one 1680 x 840 picture that goes next to its zip
+        void OpenBanner(Installed record)
+        {
+            var found = new SortedDictionary<int, Bitmap>();
+            try
+            {
+                using (ZipArchive zip = ZipFile.OpenRead(record.Package))
+                    for (int c = 1; c <= 99; c++)
+                    {
+                        string name = record.Item.Prefix + "_" + c.ToString("D2") + ".png";
+                        ZipArchiveEntry entry = zip.Entries.FirstOrDefault(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase));
+                        if (entry == null) continue;
+                        using (Stream s = entry.Open())
+                        using (var data = new MemoryStream())
+                        {
+                            s.CopyTo(data);
+                            using (var image = Image.FromStream(new MemoryStream(data.ToArray()))) found[c] = new Bitmap(image);
+                        }
+                    }
+            }
+            catch (Exception ex) { Say("Its color pictures couldn't be read: " + ex.Message, true); return; }
+            if (found.Count == 0) { Say("Make its color pictures first, then its banner", true); return; }
+            string saveTo = Path.Combine(Path.GetDirectoryName(record.Package), Path.GetFileNameWithoutExtension(record.Package) + " - banner.png");
+            using (var window = new BannerWindow(Weight.Name(record), found, saveTo)) window.ShowDialog(FindForm());
+        }
+
+        // A color pack's banner: each of its colors' picture (<prefix>.png in each color's zip), next to the first one's zip
+        void OpenPackBanner(List<Installed> packs)
+        {
+            var found = new SortedDictionary<int, Bitmap>();
+            foreach (Installed pack in packs)
+            {
+                Image picture = PackPicture(pack);
+                if (picture == null) continue;
+                using (picture) found[pack.Item.Color] = new Bitmap(picture);
+            }
+            if (found.Count == 0) { Say("Make its color pictures first, then its banner", true); return; }
+            string name = PackName(packs[0]);
+            string saveTo = Path.Combine(Path.GetDirectoryName(packs[0].Package), string.Join("_", name.Split(Path.GetInvalidFileNameChars())) + " - banner.png");
+            using (var window = new BannerWindow(name, found, saveTo)) window.ShowDialog(FindForm());
         }
 
         // the color pictures a package has (<prefix>_01.png ... _10.png in its zip), null where there's none
@@ -521,6 +566,7 @@ namespace ExMoreStuff
         public readonly FlatButton View = new FlatButton("View...");   // a costume's renders (CostumeViewer); not for a pack's row
         readonly FlatButton all = new FlatButton("All");
         public readonly FlatButton Check = new FlatButton("Check");   // the costume check on its zip (CostumeCheckWindow); not for a pack's row
+        public readonly FlatButton MakeBanner = new FlatButton("Make a banner...");   // its color pictures on one picture (BannerWindow)
         public event Action<int> FullSizeAsked;   // a color's right-click menu: that color at the game's own size
         public event Action<int> ForceAsked;      // ... or that color made a debug color (user 2026-10-16: "right click > force debug color")
         readonly string title, detail;
@@ -547,9 +593,12 @@ namespace ExMoreStuff
             View.Size = Check.Size = new Size((all.Width - 8) / 2, all.Height);
             View.Location = new Point(Make.Left, all.Bottom + 8);
             Check.Location = new Point(View.Right + 8, all.Bottom + 8);
+            MakeBanner.Size = new Size(all.Width, all.Height);
+            MakeBanner.Location = new Point(Make.Left, (canForce ? View : all).Bottom + 8);   // a pack's row too (user 2026-10-27: Decapre's colors 30-43)
             View.Visible = Check.Visible = canForce;
             int bottom = pictures.Length == 0 ? 64 : Cell(pictures.Length - 1).Bottom;
-            Size = new Size(width - 16, Math.Max(bottom + 14, (canForce ? View : all).Bottom + 14));
+            Size = new Size(width - 16, Math.Max(bottom + 14, MakeBanner.Bottom + 14));
+            Controls.Add(MakeBanner);
             Controls.Add(Make);
             Controls.Add(all);
             Controls.Add(View);
@@ -567,6 +616,7 @@ namespace ExMoreStuff
             Make.Enabled = !busy && picked.Any(p => p);
             all.Enabled = !busy;
             View.Enabled = !busy;   // the viewer draws too: not while pictures are being made
+            MakeBanner.Enabled = !busy && pictures.Any(p => p != null);   // once it has color pictures
             Invalidate();
         }
 

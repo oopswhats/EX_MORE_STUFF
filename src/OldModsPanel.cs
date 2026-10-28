@@ -25,12 +25,125 @@ namespace ExMoreStuff
         public event Action Changed;          // packages were added (the window reads its lists again)
         public event Action<bool> Working;    // an import started or ended (the rest of the window waits)
         public Func<Task> BeforeImport;       // the window's first-time PC check (PerfTest), before anything goes in
+        public Func<string, BulkAdd, Task> AddMod;   // one mod file added as Add Mod From File adds it, nothing asked (the window's)
+
+        // Fix a folder of mods (user 2026-10-27, Button Mashin' Mastah's idea): every mod file in a folder the player picks,
+        // added as Add Mod From File adds it, each costume checked and fixed (or switched off and locked). One is always done first
+        // to time it on this PC; then the player picks how many, with the time it takes. A rest of 5 s between mods keeps
+        // the PC free (never said: the player sees "Preparing"); Stop ends it after the mod being added.
+        readonly FlatButton fixFolder = new FlatButton("Fix a folder of mods..."), stop = new FlatButton("Stop") { Visible = false };
+        const int RestSeconds = 5;
+        bool stopping;
+        System.Threading.CancellationTokenSource resting;
 
         public OldModsPanel()
         {
             Controls.Add(list);
             import.Margin = new Padding(8, 4, 8, 8);
             import.Click += async (s, e) => await Import();
+            fixFolder.Margin = new Padding(8, 4, 8, 4);
+            stop.Margin = new Padding(8, 4, 8, 4);
+            fixFolder.Click += async (s, e) => await FixFolder();
+            stop.Click += (s, e) =>
+            {
+                stopping = true;
+                stop.Enabled = false;
+                if (resting != null) resting.Cancel();
+                Say("Stopping after this mod...");
+            };
+        }
+
+        // an add lets the window go when it ends (Browse Mods' own install): it waits again until the folder is done
+        void StillWorking()
+        {
+            var working = Working;
+            if (working != null) working(true);
+        }
+
+        async Task FixFolder()
+        {
+            if (AddMod == null) return;
+            if (!Game.IsGameFolder(game)) { Say("Choose the game's folder first: Change at the bottom of the window", true); return; }
+            if (Game.IsRunning()) { Say("Close the game first, then fix a folder of mods", true); return; }
+            string folder;
+            using (var dialog = new FolderBrowserDialog { Description = "Pick the folder with your mods (zip, rar or 7z files)", ShowNewFolderButton = false })
+            {
+                if (dialog.ShowDialog(FindForm()) != DialogResult.OK) return;
+                folder = dialog.SelectedPath;
+            }
+            List<string> mods;
+            try
+            {
+                mods = await Task.Run(() => Directory.EnumerateFiles(folder, "*.*", SearchOption.AllDirectories)
+                    .Where(p => new[] { ".zip", ".rar", ".7z" }.Contains(Path.GetExtension(p).ToLowerInvariant()))
+                    .OrderBy(p => p.Substring(folder.Length), StringComparer.OrdinalIgnoreCase).ToList());
+            }
+            catch (Exception ex) { Say("That folder couldn't be read: " + ex.Message, true); return; }
+            string folderName = Path.GetFileName(folder.TrimEnd('\\'));
+            if (folderName.Length == 0) folderName = folder;
+            if (mods.Count == 0) { Say("No mods (zip, rar or 7z files) in " + folderName, true); return; }
+            if (BeforeImport != null) await BeforeImport();
+            var bulk = new BulkAdd();
+            var lockedBefore = new HashSet<string>(InstallCheck.AllWarnings().Keys);
+            stopping = false;
+            int done = 0, wanted = 1;
+            Busy(true);
+            stop.Enabled = true;
+            stop.Visible = mods.Count > 1;
+            try
+            {
+                // one first, always: its time on this PC makes the estimate (user 2026-10-27)
+                Say("Checking one mod first to time it on this PC...");
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                await AddMod(mods[0], bulk);
+                done = 1;
+                StillWorking();
+                double each = Math.Max(1, watch.Elapsed.TotalSeconds) + RestSeconds;
+                if (mods.Count > 1 && !stopping)
+                {
+                    using (var ask = new FolderCheckDialog(mods.Count, folderName, each)) { ask.ShowDialog(FindForm()); wanted = ask.Picked; }
+                }
+                for (int i = 1; i < wanted && !stopping; i++)
+                {
+                    Say("Preparing the next mod... (" + done + " of " + wanted + " done)");
+                    resting = new System.Threading.CancellationTokenSource();
+                    try { await Task.Delay(RestSeconds * 1000, resting.Token); }
+                    catch (TaskCanceledException) { }
+                    finally { resting.Dispose(); resting = null; }
+                    if (stopping) break;
+                    if (Game.IsRunning()) { bulk.NotAdded.Add("the game was opened, so the rest weren't added"); break; }
+                    Say("Checking " + (i + 1) + " of " + wanted + "... " + FolderCheckDialog.FixTime((wanted - i) * each) + " left");
+                    try { await AddMod(mods[i], bulk); }
+                    catch (Exception ex) { bulk.NotAdded.Add(Path.GetFileName(mods[i]) + ": " + ex.Message); }
+                    StillWorking();
+                    done = i + 1;
+                }
+            }
+            catch (Exception ex) { bulk.NotAdded.Add(Path.GetFileName(mods[done]) + ": " + ex.Message); }
+            finally
+            {
+                stop.Visible = false;
+                Busy(false);
+            }
+            var changed = Changed;
+            if (changed != null) changed(); else Fill();   // the window's reload lists them, then its tests
+            // costumes locked by this run (they can't be fixed), counted once each however they were said
+            int switchedOff = InstallCheck.AllWarnings().Keys.Count(k => !lockedBefore.Contains(k));
+            int fixedOnes = bulk.Added.Count(a => a.Contains("(fixed"));
+            var notAdded = bulk.NotAdded.Where(n => !n.Contains(InstallCheck.CantBeFixed)).ToList();
+            string summary = "Checked " + done + (done == 1 ? " mod" : " mods") + ": " + bulk.Added.Count + " added" + (fixedOnes > 0 ? " (" + fixedOnes + " fixed)" : "") +
+                             (switchedOff > 0 ? ", " + switchedOff + " switched off" : "") +
+                             (bulk.Already.Count > 0 ? ", " + bulk.Already.Count + " already in EX More Stuff" : "") +
+                             (notAdded.Count > 0 ? ", " + notAdded.Count + " not added" : "") + ".";
+            string report = summary +
+                            (switchedOff > 0 ? "\n\nThe switched-off ones have problems that can't be fixed: they would make online matches go out of sync or crash the game. " +
+                                               "See " + InstallCheck.ListButton + "." : "") +
+                            (notAdded.Count > 0 ? "\n\nNot added:\n    " + string.Join("\n    ", notAdded) : "") +
+                            (bulk.Already.Count > 0 ? "\n\nAlready in EX More Stuff, left as they are:\n    " + string.Join("\n    ", bulk.Already) : "") +
+                            (bulk.Notes.Count > 0 ? "\n\nNote: " + string.Join("\n\n", bulk.Notes) : "");
+            if (notAdded.Count > 0) BugReport.Noted("Fix a folder of mods, not added: " + string.Join("; ", notAdded));
+            MessageBox.Show(FindForm(), report, "EX More Stuff", MessageBoxButtons.OK, notAdded.Count + switchedOff > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+            Say(summary, notAdded.Count + switchedOff > 0);
         }
 
         public void SetGame(string folder)
@@ -85,6 +198,11 @@ namespace ExMoreStuff
             import.Text = stages + costumes > 0 ? "Import legacy mods (" + (stages + costumes) + ")" : "Import legacy mods";
             import.Width = TextRenderer.MeasureText(import.Text, import.Font).Width + 36;
             controls.Add(import);
+            controls.Add(ShadowLabel.Note("Or a folder of mods you downloaded (zip, rar or 7z files): each is checked, fixed where it can be, and added " +
+                                          "to EX More Stuff. One that can't be fixed is switched off, so it can't make online matches go out of sync.", width));
+            fixFolder.Enabled = !stop.Visible;
+            controls.Add(fixFolder);
+            controls.Add(stop);
             status.Width = width - 16;
             controls.Add(status);
             if (mods.Count == 0 && !scanning) controls.Add(ShadowLabel.Note("No legacy mods found: everything in the game's folders is the game's own or EX More Stuff's.", width));
@@ -121,7 +239,7 @@ namespace ExMoreStuff
                 }
             }
             list.SuspendLayout();
-            foreach (Control c in list.Controls.Cast<Control>().ToList()) if (c != import && c != status) c.Dispose();
+            foreach (Control c in list.Controls.Cast<Control>().ToList()) if (c != import && c != status && c != fixFolder && c != stop) c.Dispose();
             list.Controls.Clear();
             foreach (Control c in controls) { list.Controls.Add(c); list.SetFlowBreak(c, true); }
             list.ResumeLayout();
@@ -187,7 +305,7 @@ namespace ExMoreStuff
 
         void Busy(bool on)
         {
-            import.Enabled = !on;
+            import.Enabled = fixFolder.Enabled = !on;
             UseWaitCursor = on;
             var working = Working;
             if (working != null) working(on);
@@ -293,6 +411,73 @@ namespace ExMoreStuff
             int right = PutBack.Left - 12;
             Theme.Draw(g, Title, Theme.Bold(10.5f), Theme.Text, new Rectangle(14, 10, right - 14, 22), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             Theme.Draw(g, Detail, Theme.Font(8.5f), Theme.Muted, new Rectangle(14, 34, right - 14, 18), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        }
+    }
+
+    // What Fix a folder of mods did, mod by mod (the window's AddFiles fills it): nothing is asked on the way
+    sealed class BulkAdd
+    {
+        public readonly List<string> Added = new List<string>(), Already = new List<string>(), NotAdded = new List<string>(), Notes = new List<string>();
+    }
+
+    // How many of a folder's mods to check (Fix a folder of mods): one is done already, and timed; the time shown for the
+    // number picked counts each mod's time on this PC and the rest between them (never named: user 2026-10-27).
+    class FolderCheckDialog : Form
+    {
+        public int Picked { get; private set; }
+
+        public FolderCheckDialog(int found, string folder, double secondsEach)
+        {
+            Text = "Fix a folder of mods";
+            Font = Theme.Font(9f);
+            BackColor = Theme.Base;
+            ForeColor = Theme.Text;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = MinimizeBox = false;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            const int width = 520, pad = 22;
+            Picked = 1;   // Cancel: only the one already done
+            Func<int, string> time = n => FixTime((n - 1) * secondsEach);
+            var heading = new Label { Text = "Found " + found + " mods in " + folder, AutoSize = false, AutoEllipsis = true, BackColor = Color.Transparent, Font = Theme.Bold(13f),
+                                      ForeColor = Theme.Text, Bounds = new Rectangle(pad, 18, width - 2 * pad, 30) };
+            var about = new Label { Text = "Checking all " + found + " takes " + time(found) + " on this PC.", AutoSize = false, BackColor = Color.Transparent, Font = Theme.Font(9.5f),
+                                    ForeColor = Theme.Muted, Bounds = new Rectangle(pad, 56, width - 2 * pad, 22) };
+            var check = new Label { Text = "Check", AutoSize = true, BackColor = Color.Transparent, Font = Theme.Font(10f), ForeColor = Theme.Text, Location = new Point(pad, 96) };
+            var count = new NumericUpDown { Minimum = 1, Maximum = found, Value = found, Width = 70, BackColor = Theme.Well, ForeColor = Theme.Text, Font = Theme.Bold(10f),
+                                            BorderStyle = BorderStyle.FixedSingle, TextAlign = HorizontalAlignment.Center, Location = new Point(pad + 52, 93) };
+            var ofThem = new Label { AutoSize = true, BackColor = Color.Transparent, Font = Theme.Font(10f), ForeColor = Theme.Text, Location = new Point(count.Right + 8, 96) };
+            Action said = () => ofThem.Text = "of them: " + time((int)count.Value);
+            said();
+            count.ValueChanged += (s, e) => said();
+            var go = new FlatButton("Check", true);
+            var cancel = new FlatButton("Cancel");
+            int top = 140;
+            go.Location = new Point(width - pad - go.Width, top);
+            cancel.Location = new Point(go.Left - 10 - cancel.Width, top);
+            ClientSize = new Size(width, go.Bottom + 18);
+            go.Click += (s, e) => { Picked = (int)count.Value; DialogResult = DialogResult.OK; };
+            cancel.Click += (s, e) => { Picked = 1; DialogResult = DialogResult.Cancel; };
+            AcceptButton = null;
+            Controls.AddRange(new Control[] { heading, about, check, count, ofThem, go, cancel });
+        }
+
+        // the time in a player's words: "under a minute", "about 5 minutes", "about 1.5 hours"
+        public static string FixTime(double seconds)
+        {
+            if (seconds < 45) return "under a minute";
+            int minutes = (int)Math.Round(seconds / 60);
+            if (minutes < 60) return "about " + minutes + (minutes == 1 ? " minute" : " minutes");
+            double hours = Math.Round(seconds / 3600, 1);
+            return "about " + hours.ToString("0.#") + (hours == 1 ? " hour" : " hours");
+        }
+
+        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Theme.DarkTitleBar(Handle); }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keys)
+        {
+            if (keys == Keys.Escape) { Picked = 1; DialogResult = DialogResult.Cancel; return true; }
+            return base.ProcessCmdKey(ref msg, keys);
         }
     }
 

@@ -29,7 +29,43 @@ namespace ExMoreStuff
         readonly Label status = new Label { AutoSize = false, BackColor = Color.Transparent, ForeColor = Theme.Text, Font = Theme.Font(9.5f), Height = 22, AutoEllipsis = true };
         static readonly Dictionary<string, Image> pictures = new Dictionary<string, Image>();   // by zip and its time
 
-        public PackagesPanel() { Controls.Add(list); }
+        // a search over the packages (user 2026-10-26: "need a search function for the package codes section"): every word
+        // in its name, fighter, kind, code or zip; the rows that don't match are hidden, so typing goes on in place
+        readonly TextBox search = new TextBox { Width = 220, BackColor = Theme.Well, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle, Font = Theme.Font(10.5f), Margin = new Padding(8, 2, 8, 6) };
+        readonly Timer typing = new Timer { Interval = 300 };
+        readonly Dictionary<Control, string> searched = new Dictionary<Control, string>();   // row -> what the search looks in
+        Control noMatch;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
+
+        public PackagesPanel()
+        {
+            Controls.Add(list);
+            search.HandleCreated += (s, e) => SendMessage(search.Handle, 0x1501, (IntPtr)1, "Search packages");   // EM_SETCUEBANNER: the grey hint
+            search.TextChanged += (s, e) => { typing.Stop(); typing.Start(); };
+            typing.Tick += (s, e) => { typing.Stop(); ShowMatches(); };
+        }
+
+        // the rows every word of the search is in; the others hidden
+        void ShowMatches()
+        {
+            string[] words = search.Text.Trim().ToLowerInvariant().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            list.SuspendLayout();
+            int shown = 0;
+            foreach (var row in searched)
+            {
+                bool match = words.All(w => row.Value.Contains(w));
+                row.Key.Visible = match;
+                if (match) shown++;
+            }
+            if (noMatch != null)
+            {
+                noMatch.Visible = searched.Count > 0 && shown == 0;
+                noMatch.Text = "No packages match \"" + search.Text.Trim() + "\".";
+            }
+            list.ResumeLayout();
+        }
 
         bool stale;   // the lists changed while the page was hidden: filled when it's shown
 
@@ -67,8 +103,10 @@ namespace ExMoreStuff
                      Catalog.LastShared + "; " + Catalog.FirstPersonal + "-" + Catalog.LastPersonal + " and stage codes U12, 1U2, 12U ... are kept for your own mods; " +
                      (Catalog.LastPersonal + 1) + "-" + Catalog.LastSlot + " aren't free, nor are stage codes of one A or T with two digits (A12, 1A2, 12A, T12 ...).", width),
             };
+            controls.Add(search);
             status.Width = width - 16;
             controls.Add(status);
+            searched.Clear();
             var own = Game.IsGameFolder(game)
                 ? Installer.Load(game).Select(r => Tuple.Create(r, true)).Concat(Installer.Removed(game).Select(r => Tuple.Create(r, false)))
                     .Where(t => t.Item1.Source == "file").OrderBy(t => t.Item1.Item.IsStage).ThenBy(t => t.Item1.Item.Fighter).ThenBy(t => t.Item1.Item.Code).ThenBy(t => t.Item1.Item.Slot).ThenBy(t => t.Item1.Item.Color).ToList()
@@ -78,13 +116,23 @@ namespace ExMoreStuff
             foreach (var group in own.GroupBy(t => t.Item1.Item.IsColor && !string.IsNullOrEmpty(t.Item1.Package) ? "pack|" + Path.GetFullPath(t.Item1.Package).ToLowerInvariant() : "one|" + t.Item1.Item.Key))
             {
                 var members = group.ToList();
-                controls.Add(members.Count > 1 ? PackRow(members, width) : Row(members[0].Item1, members[0].Item2, width));
+                Control row = members.Count > 1 ? PackRow(members, width) : Row(members[0].Item1, members[0].Item2, width);
+                searched[row] = string.Join(" ", members.Select(t =>
+                {
+                    Item item = t.Item1.Item;
+                    return Weight.Name(t.Item1) + " " + Fighters.Name(item.Fighter) + " " + item.Fighter + " " + (item.IsStage ? "stage " + item.Code : (item.IsColor ? "color " + item.Color : "costume") + " " + item.Slot) +
+                           " " + Path.GetFileName(t.Item1.Package);
+                })).ToLowerInvariant();
+                controls.Add(row);
             }
+            noMatch = ShadowLabel.Note("", width);
+            controls.Add(noMatch);
             list.SuspendLayout();
-            foreach (Control c in list.Controls.Cast<Control>().ToList()) if (c != status) c.Dispose();   // the status line stays
+            foreach (Control c in list.Controls.Cast<Control>().ToList()) if (c != status && c != search) c.Dispose();   // the status line and search box stay
             list.Controls.Clear();
             foreach (Control c in controls) { list.Controls.Add(c); list.SetFlowBreak(c, true); }
             list.ResumeLayout();
+            ShowMatches();
         }
 
         Control Row(Installed record, bool inGame, int width)
@@ -267,8 +315,9 @@ namespace ExMoreStuff
         {
             int shift = start - records[0].Item.Color;
             if (shift == 0) return "that's its first number already";
-            if (start < Catalog.FirstCustomColor || records[records.Count - 1].Item.Color + shift > Catalog.LastColor)
-                return "its colors would go past " + Catalog.FirstCustomColor + "-" + Catalog.LastColor;
+            int lowest = Catalog.FirstColor(records[0].Item.Slot);
+            if (start < lowest || records[records.Count - 1].Item.Color + shift > Catalog.LastColor)
+                return "its colors would go past " + lowest + "-" + Catalog.LastColor;
             if (records.Any(r => r.Source != "file" || string.IsNullOrEmpty(r.Package) || !File.Exists(r.Package))) return "its zip isn't where it was";
             var own = new HashSet<int>(records.Select(r => r.Item.Color));
             Item one = records[0].Item;

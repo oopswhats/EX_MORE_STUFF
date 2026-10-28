@@ -8,7 +8,8 @@ using System.Text.RegularExpressions;
 namespace ExMoreStuff
 {
     // The game's own stages (EMBER's StageCatalog list) with EMBER's stage pictures, built into the program, and
-    // the rule EMBER uses for custom stages: players without custom stage n see Fallbacks[(n - 1) % 18].
+    // the rule EMBER uses for custom stages: players without custom stage n see Fallbacks[(n - 1) % 18] (% 17 once
+    // NoSnowyStandIn is on).
     static class Stages
     {
         public static readonly string[] Codes =
@@ -27,8 +28,13 @@ namespace ExMoreStuff
             "Jurassic Era Research Facility",
         };
 
-        static readonly string[] Fallbacks =
-            { "CHN", "RUS", "BRA", "AFR", "VIE", "EUR", "RVR", "SCO", "JPN", "IND", "KOR", "CNX", "BRX", "VNX", "JPX", "AFX", "ELV", "HFP" };
+        // never RUS once Ember takes our pull request (branch custom-stage-no-rus): the game gives fighters frosty breath
+        // there, so a custom stage played as it had it too (user 2026-10-27). Until then it says what Ember does today, RUS
+        // included (v1.0: "if it mentions incorrect fallback stages for the opponent its wrong right now").
+        public const bool NoSnowyStandIn = false;
+        static readonly string[] Fallbacks = NoSnowyStandIn
+            ? new[] { "CHN", "BRA", "AFR", "VIE", "EUR", "RVR", "SCO", "JPN", "IND", "KOR", "CNX", "BRX", "VNX", "JPX", "AFX", "ELV", "HFP" }
+            : new[] { "CHN", "RUS", "BRA", "AFR", "VIE", "EUR", "RVR", "SCO", "JPN", "IND", "KOR", "CNX", "BRX", "VNX", "JPX", "AFX", "ELV", "HFP" };
 
         // Every code the game has, the bonus rounds GAS and SCX included: none of them can be a custom stage's.
         static readonly string[] GameCodes = Codes.Concat(new[] { "GAS", "SCX" }).ToArray();
@@ -41,7 +47,8 @@ namespace ExMoreStuff
         }
 
         // What players without a custom stage see (EMBER's StageCatalog): a letter and a number (C12, D05) by its
-        // number, 1 CHN, 2 RUS ... 18 HFP, 19 CHN ...; any other code by the sum of its characters.
+        // number, 1 CHN, 2 RUS ... 18 HFP, 19 CHN ... (1 CHN, 2 BRA ... 17 HFP with NoSnowyStandIn); any other code by
+        // the sum of its characters.
         public static string FallbackCode(string code)
         {
             int number = char.IsDigit(code[1]) && char.IsDigit(code[2]) ? (code[1] - '0') * 10 + (code[2] - '0') : 0;

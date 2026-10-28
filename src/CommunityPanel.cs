@@ -835,6 +835,7 @@ namespace ExMoreStuff
                     byte[] picture = null;
                     if (!string.IsNullOrEmpty(mod.Picture)) try { picture = await GameBanana.Bytes(mod.Picture); } catch (Exception) { }
                     var into = new List<string>();
+                    var problems = new List<string>();
                     bool personal = false, firstModel = false;
                     var records = Installer.Load(g).Concat(Installer.Removed(g)).ToList();
                     foreach (var costume in costumes)
@@ -859,15 +860,27 @@ namespace ExMoreStuff
                         };
                         Say("Putting " + mod.Name + " in as " + Fighters.Name(costume.Fighter) + " " + slot.ToString("D2") + "...");
                         int s = slot;
+                        string said = null, warning = null;
                         await Task.Run(() =>
                         {
-                            SkinImport.Build(g, costume, s, picture ?? new byte[0], zip);   // a GameBanana install: never the mod's own card picture
-                            Installer.InstallPackage(g, item, zip, "file");
+                            // built beside it first: an older version's zip stays as it is if this one isn't wanted
+                            string fresh = zip.Substring(0, zip.Length - 4) + " (new).zip";
+                            try
+                            {
+                                SkinImport.Build(g, costume, s, picture ?? new byte[0], fresh);   // a GameBanana install: never the mod's own card picture
+                                InstallCheck.Decide(g, fresh, true, out said, out warning);   // the costume check (EX More Stuff's own zip, fixed in it)
+                                File.Copy(fresh, zip, true);
+                                Installer.InstallPackage(g, item, zip, "file");
+                                InstallCheck.SetWarning(item.Key, warning);
+                                if (warning != null) Installer.Remove(g, item.Key);   // it can't be fixed: switched off and locked
+                            }
+                            finally { try { File.Delete(fresh); } catch (Exception) { } }
                         });
-                        into.Add(Fighters.Name(costume.Fighter) + " " + slot.ToString("D2"));
+                        string seat = Fighters.Name(costume.Fighter) + " " + slot.ToString("D2");
+                        if (warning != null) { problems.Add(seat + " is switched off: it has problems that can't be fixed (see " + InstallCheck.ListButton + ")"); continue; }
+                        into.Add(seat + (said != null ? " (" + said + ")" : ""));
                         firstModel |= costume.ModelsDiffer;
                     }
-                    var problems = new List<string>();
                     if (moves != null) problems.Add("its move files (test switch: " + moves + ")");
                     if (stageFiles.Count > 0)
                     {
@@ -1298,7 +1311,7 @@ namespace ExMoreStuff
                     return problem;
                 }
                 Action<string> say = text => BeginInvoke((Action)(() => { Say(text); if (Progress != null) Progress(text); }));
-                var result = await Task.Run(() => ModFile.Install(g, path, null, null, "", null, null, say));
+                var result = await Task.Run(() => ModFile.Install(g, path, null, null, "", null, null, say, check: true));   // the costume check (InstallCheck)
                 if (result.Into.Count == 0) throw new InvalidOperationException(string.Join("; ", result.Problems));
                 done = ModFile.NameFrom(path) + " is in: " + string.Join(", ", result.Into) + " (only you see it)" +
                        (result.Problems.Count > 0 ? ". Not put in: " + string.Join("; ", result.Problems) : "") + Notes(g, before);

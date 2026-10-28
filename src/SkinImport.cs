@@ -18,9 +18,10 @@ namespace ExMoreStuff
     {
         // the game's own costume files (its update and DLC folders; never patch_ae2_tu3, where mods go)
         static readonly string[] GameRoots = { "patch_ae2_tu2", "patch_ae2", @"dlc\04_ae2", @"dlc\03_character_free", "resource" };
-        public static readonly Regex CostumeFile = new Regex(@"^([A-Za-z]{3})_(\d\d)(?:_(\d\d))?\.(obj\.emo|nml\.emb|shd\.emo|bsr|csb|col\.emb|obj\.emm)$", RegexOptions.IgnoreCase);
+        public static readonly Regex CostumeFile = new Regex(@"^([A-Za-z]{3})_(\d\d)(?:_(\d\d))?\.(obj\.emo|nml\.emb|shd\.emo|bsr|csb|col\.emb|obj\.emm|clw\.emo|msk\.emo)$", RegexOptions.IgnoreCase);
         static readonly Regex PictureFile = new Regex(@"^([A-Za-z]{3})_(\d\d)(?:_(\d\d))?\.png$", RegexOptions.IgnoreCase);
-        static readonly string[] Parts = { ".obj.emo", ".nml.emb", ".shd.emo", ".bsr", ".csb" };
+        // .clw/.msk.emo: Vega's claw and mask, which the game loads for every Vega costume (the base costume's when a mod has none)
+        static readonly string[] Parts = { ".obj.emo", ".nml.emb", ".shd.emo", ".bsr", ".csb", ".clw.emo", ".msk.emo" };
         // a fighter's move files: a mod that changes them changes the fighter in every costume (online too: a desync), and
         // its model may need them (Juri gótica crashed without hers, user 2026-10-13: "dont install and why")
         static readonly Regex MovesFile = new Regex(@"^([A-Za-z]{3})\.(bac|bcm)$", RegexOptions.IgnoreCase);

@@ -1,4 +1,4 @@
-// The costume check on a costume made from the game's own C.Viper (costume 1, put in slot 90): clean, it's OK; with its
+﻿// The costume check on a costume made from the game's own C.Viper (costume 1, put in slot 90): clean, it's OK; with its
 // neck moved it desyncs, a material taken out of a color draws white, a part left out is missing; the fixer's copy is
 // OK again, and the original stays as it was. Then: a copy is never made over the costume or in the game's folder, the
 // mod's marker files go with it, a white color alone is worth a look, a damaged model or zip is a finding while the rest
@@ -199,6 +199,80 @@ namespace ExMoreStuff
             Check(!CostumeCheck.Check(game, installed).Any(r => r.Name == "AGL_05"), "the installed check leaves the game's slots 01-07 out");
             var picked = CostumeCheck.Find(Path.Combine(more, "AGL_92_03.obj.emm")).SelectMany(x => CostumeCheck.Check(game, x)).ToList();
             Check(picked.Count == 1 && picked[0].Name == "AGL_92", "a file picked checks its costume only");
+
+            // as a costume comes in (InstallCheck, user 2026-10-27: nothing asked): the faulty AGL_90 in a zip is fixed, in a
+            // copy beside a player's zip or in EX More Stuff's own in place; a clean one goes in as it is; a damaged one can't
+            // be fixed: its warning comes back, and the caller switches it off and locks it
+            AppFolders.Root = Path.Combine(args[1], "data");
+            AppFolders.NoMigrate = true;
+            Directory.CreateDirectory(AppFolders.Root);
+            string incoming = Path.Combine(args[1], "incoming");
+            Directory.CreateDirectory(incoming);
+            Func<string, string, string, string> zipOf = (folder, stem, zipName) =>
+            {
+                string z = Path.Combine(incoming, zipName);
+                using (var a = System.IO.Compression.ZipFile.Open(z, System.IO.Compression.ZipArchiveMode.Create))
+                    foreach (string f in Directory.GetFiles(folder, stem + "*")) System.IO.Compression.ZipFileExtensions.CreateEntryFromFile(a, f, Path.GetFileName(f));
+                return z;
+            };
+            string faultyZip = zipOf(work, "AGL_90", "AGL_90.zip");
+            byte[] faultyBytes = File.ReadAllBytes(faultyZip);
+            string said, warning;
+            string got = InstallCheck.Decide(game, faultyZip, false, out said, out warning);
+            Console.WriteLine("      said: " + said);
+            Check(got != null && got != faultyZip && got.EndsWith(" - fixed.zip") && File.ReadAllBytes(faultyZip).SequenceEqual(faultyBytes) && warning == null,
+                  "a fixable costume is fixed, nothing asked: a player's zip gets the fixed copy beside it, theirs stays as it was");
+            Check(got != null && CostumeCheck.Check(game, CostumeCheck.FromZip(got)).All(r => r.Verdict != CostumeCheck.Verdict.Faulty), "the fixed copy isn't faulty");
+            Check(said != null && said.StartsWith("fixed: ") && said.Contains("bones"), "it says what the fix did");
+
+            string own = Path.Combine(incoming, "own.zip");
+            File.Copy(faultyZip, own);
+            got = InstallCheck.Decide(game, own, true, out said, out warning);
+            Check(got == own && warning == null && CostumeCheck.Check(game, CostumeCheck.FromZip(own)).All(r => r.Verdict != CostumeCheck.Verdict.Faulty) &&
+                  !Directory.GetFiles(incoming, "own*fixed*").Any(), "EX More Stuff's own zip is fixed in place");
+
+            string cleanZip = zipOf(copy, "AGL_90", "clean.zip");
+            got = InstallCheck.Decide(game, cleanZip, false, out said, out warning);
+            Check(got == cleanZip && said == null && warning == null, "a clean costume goes in as it is");
+
+            string brokenZip = zipOf(more, "AGL_93", "AGL_93.zip");
+            got = InstallCheck.Decide(game, brokenZip, false, out said, out warning);
+            Console.WriteLine("      warning: " + warning);
+            Check(got == brokenZip && said == null && warning != null && warning.Contains("damaged"), "a damaged model can't be fixed: its warning comes back");
+            Check(!warning.Contains("Ember") && !warning.Contains("colour"), "the warning doesn't name Ember");
+
+            // a locked costume's warning, kept for its card and the footer's list
+            InstallCheck.SetWarning("costume:AGL:90", "line one\nline two");
+            Check(InstallCheck.Warning("costume:AGL:90") == "line one\nline two" && InstallCheck.AllWarnings().Count == 1, "a costume's warning is kept, line breaks too");
+            InstallCheck.SetWarning("costume:AGL:90", null);
+            Check(InstallCheck.Warning("costume:AGL:90") == null && InstallCheck.AllWarnings().Count == 0, "a version that's fine unlocks it");
+            Check(FolderCheckDialog.FixTime(30) == "under a minute" && FolderCheckDialog.FixTime(300) == "about 5 minutes" &&
+                  FolderCheckDialog.FixTime(60) == "about 1 minute" && FolderCheckDialog.FixTime(5400) == "about 1.5 hours", "the folder's time in a player's words");
+
+            // the folder's question and the footer's list, off screen, as pictures (args[3]: a folder)
+            if (args.Length > 3)
+            {
+                Directory.CreateDirectory(args[3]);
+                var windows = new System.Windows.Forms.Form[]
+                {
+                    new FolderCheckDialog(37, "SF4 mods", 8),
+                    new TextWindow("Switched-off costumes", "These costumes would make online matches go out of sync or crash the game, so they stay off. A new version of one that's fine is switched on again as usual.",
+                                   "Raiden 84 (Raiden skin) is switched off and can't be switched on: it has problems that can't be fixed.\n\n" + warning),
+                };
+                for (int i = 0; i < windows.Length; i++)
+                    using (var d = windows[i])
+                    {
+                        d.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
+                        d.Location = new System.Drawing.Point(-4000, -4000);
+                        d.Show();
+                        System.Windows.Forms.Application.DoEvents();
+                        using (var shot = new System.Drawing.Bitmap(d.Width, d.Height))
+                        {
+                            d.DrawToBitmap(shot, new System.Drawing.Rectangle(0, 0, d.Width, d.Height));
+                            shot.Save(Path.Combine(args[3], "window" + (i + 1) + ".png"));
+                        }
+                    }
+            }
 
             // the results window, off screen, as a picture (args[2])
             if (args.Length > 2)

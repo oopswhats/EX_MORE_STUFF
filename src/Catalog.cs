@@ -76,7 +76,7 @@ namespace ExMoreStuff
             if (IsColor)
             {
                 if (Slot < 1 || Slot > Catalog.LastSlot) return "costume " + Slot + " is outside 1-" + Catalog.LastSlot;
-                if (Color < Catalog.FirstCustomColor || Color > Catalog.LastColor) return "color " + Color + " is outside " + Catalog.FirstCustomColor + "-" + Catalog.LastColor;
+                if (Color < Catalog.FirstColor(Slot) || Color > Catalog.LastColor) return "color " + Color + " is outside " + Catalog.FirstColor(Slot) + "-" + Catalog.LastColor;
                 return null;
             }
             if (Slot < Catalog.FirstCustomCostume || Slot > Catalog.LastSlot) return "slot " + Slot + " is outside " + Catalog.FirstCustomCostume + "-" + Catalog.LastSlot;
@@ -91,8 +91,12 @@ namespace ExMoreStuff
         public const int FirstCustomCostume = 8, LastShared = 79, FirstPersonal = 80, LastPersonal = 84, LastSlot = 99;
         // past the personal seats, a player's own mods go 40 down to 8, then 79 down to 41 (SkinImport.FreeSlot)
         public const int OverflowFrom = 40;
-        // New colors of any costume: 30-99 (after the game's own, which go up to 22). Not shared: any free number.
+        // New colors of the game's costumes: 30-99 (after the game's own, which go up to 22); of a custom costume (08-99),
+        // which has only its ten: 11-99 (user 2026-10-27) once Ember takes our pull request (branch custom-stage-no-rus);
+        // until then 30-99 for every costume, as today's Ember shows them (v1.0). Not shared: any free number.
         public const int FirstCustomColor = 30, LastColor = 99;
+        public const bool CustomColorsFromEleven = false;
+        public static int FirstColor(int costume) { return CustomColorsFromEleven && costume >= FirstCustomCostume ? 11 : FirstCustomColor; }
 
         // Codes that aren't free: costume slots 85-99, and stage codes of one A or T with two digits (A12, 1A2, 12A,
         // T12, 1T2, 12T). Using one is allowed, after a warning.

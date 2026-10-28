@@ -100,8 +100,14 @@ namespace ExMoreStuff
             Console.WriteLine("Stage codes");
             Check(Stages.IsCustomCode("C12") && Stages.IsCustomCode("D05") && Stages.IsCustomCode("XYZ"), "C12, D05, XYZ are custom codes");
             Check(!Stages.IsCustomCode("CHN") && !Stages.IsCustomCode("GAS") && !Stages.IsCustomCode("c12") && !Stages.IsCustomCode("AB"), "game codes, lower case and short codes aren't");
-            Check(Stages.FallbackCode("C12") == "CNX" && Stages.FallbackCode("D12") == "CNX" && Stages.FallbackCode("C71") == "ELV" && Stages.FallbackCode("XYZ") == "AFX",
-                "fallbacks: C12/D12 Run-down Back Alley, C71 Cosmic Elevator, XYZ Solar Eclipse");
+            if (Stages.NoSnowyStandIn)
+            {
+                Check(Stages.FallbackCode("C12") == "BRX" && Stages.FallbackCode("D12") == "BRX" && Stages.FallbackCode("C71") == "AFR" && Stages.FallbackCode("XYZ") == "VNX",
+                    "fallbacks: C12/D12 Pitch-black Jungle, C71 Small Airfield, XYZ Morning Mist Bay");
+                Check(Enumerable.Range(1, 99).All(n => Stages.FallbackCode("C" + n.ToString("D2")) != "RUS"), "no custom stage plays as Snowy Rail Yard (frosty breath)");
+            }
+            else Check(Stages.FallbackCode("C12") == "CNX" && Stages.FallbackCode("D12") == "CNX" && Stages.FallbackCode("C71") == "ELV" && Stages.FallbackCode("XYZ") == "AFX" &&
+                       Stages.FallbackCode("C02") == "RUS", "fallbacks as today's Ember: C12/D12 Run-down Back Alley, C71 Cosmic Elevator, XYZ Solar Eclipse, C02 Snowy Rail Yard");
             // A player's own D05 with music, made from Training Stage plus a copy of the JUR theme.
             string d05 = Path.Combine(packages, "Someone else's stage.zip");
             using (ZipArchive zip = ZipFile.Open(d05, ZipArchiveMode.Create))

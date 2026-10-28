@@ -26,7 +26,7 @@ namespace ExMoreStuff
         const string ListName = "ex_more_stuff_costumes.json", BackupFolder = "ex_more_stuff_backup";
         // the game's own costume files (never patch_ae2_tu3: the player's mods and these swaps are there)
         static readonly string[] GameRoots = { "patch_ae2_tu2", "patch_ae2", @"dlc\04_costume", @"dlc\02_costume", @"dlc\04_ae2", @"dlc\03_character", @"dlc\03_character_free", "resource" };
-        static readonly string[] Parts = { ".obj.emo", ".shd.emo", ".nml.emb", ".bsr", ".csb" };
+        static readonly string[] Parts = { ".obj.emo", ".shd.emo", ".nml.emb", ".bsr", ".csb", ".clw.emo", ".msk.emo" };   // .clw/.msk.emo: Vega's claw and mask
 
         public static string Key(string fighter, int costume) { return fighter + ":" + costume; }
 

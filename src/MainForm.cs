@@ -80,6 +80,9 @@ namespace ExMoreStuff
         readonly ProgressLine progress = new ProgressLine();
         readonly ToolTip tips = new ToolTip();
         readonly FlatButton apply = new FlatButton("Apply changes", true) { Enabled = false };
+        // the costumes the check switched off and locked (InstallCheck; user 2026-10-27: "add a warning button at the bottom to
+        // the right of apply changes"): "⚠ Warnings (3)", always there; a click lists them with what's wrong
+        readonly FlatButton lockedCostumes = new FlatButton("⚠ Warnings (0)");
         readonly FlatButton disableAll = new FlatButton("Disable everything");
         readonly FlatButton refresh = new FlatButton("Refresh");
         readonly FolderButton folderButton = new FolderButton();
@@ -153,15 +156,10 @@ namespace ExMoreStuff
             progress.Bounds = new Rectangle(0, 0, ClientSize.Width, 3);
             // the buttons a little smaller than elsewhere (same text size), so three fit beside the status
             foreach (FlatButton b in new[] { refresh, disableAll, apply }) b.Size = new Size(TextRenderer.MeasureText(b.Text, b.Font).Width + 24, 32);   // (Restore previous fits in Disable everything's width)
-            apply.Location = new Point(ClientSize.Width - apply.Width - 18, 19);
-            disableAll.Location = new Point(apply.Left - disableAll.Width - 8, 19);
-            refresh.Location = new Point(disableAll.Left - refresh.Width - 8, 19);
-            folderButton.Location = new Point(refresh.Left - folderButton.Width - 6, 12);
-            status.Bounds = new Rectangle(18, 14, folderButton.Left - 30, 20);
-            gameLabelRoom = folderButton.Left - 94;
-            gameLabel.Bounds = new Rectangle(18, 36, gameLabelRoom, 18);
+            LayOutFooter();
             change.LinkClicked += (s, e) => ChooseGame();
-            footer.Controls.AddRange(new Control[] { progress, status, gameLabel, change, folderButton, refresh, disableAll, apply });
+            footer.Controls.AddRange(new Control[] { progress, status, gameLabel, change, folderButton, refresh, disableAll, apply, lockedCostumes });
+            lockedCostumes.Click += (s, e) => ShowLockedCostumes();
             refresh.Click += async (s, e) => await RefreshAll();
             communityPage.RefreshAll = RefreshAll;   // Browse Mods' own Refresh does the same
             disableAll.Click += async (s, e) => { if (Previous() != null) await RestorePrevious(); else DisableEverything(); };   // or Restore previous
@@ -196,6 +194,8 @@ namespace ExMoreStuff
             communityPage.Blocked = () => Pending() > 0 ? "apply or undo the other changes waiting first" : null;
             communityPage.BeforeInstall = EnsurePcCheck;
             oldModsPage.BeforeImport = EnsurePcCheck;
+            // Fix a folder of mods: each mod as Add Mod From File adds it, nothing asked; the tests wait for the end (Changed)
+            oldModsPage.AddMod = async (path, bulk) => { holdTests = true; try { await AddFiles(new[] { path }, bulk); } finally { holdTests = false; } };
             communityPage.UpdatesChanged += count => communityTab.Dot = count > 0;   // the purple dot: updates on GameBanana
             communityPage.NewFromFavorites += unseen => communityTab.Heart = unseen;   // the heart: new from favorite creators
             freeCodesPage.Portrait = code => { Image portrait; return portraits.TryGetValue(code, out portrait) ? portrait : null; };
@@ -302,6 +302,7 @@ namespace ExMoreStuff
             ShowProgramUpdate();
             Reload();
             await TakeOutPulled();
+            BeginInvoke((Action)(async () => await CheckOldCostumes()));   // in the background, a costume at a time
             communityPage.CheckForUpdates();   // GameBanana's list, read in the background: updates for installed mods
             // GameBanana 1-Click links (OneClick): the one it was started with, and any handed over while it's open
             WatchLinks();
@@ -324,6 +325,59 @@ namespace ExMoreStuff
                 catch (Exception) { }
             ReloadKeeping(null);
             if (said.Count > 0) MessageBox.Show(this, string.Join("\n\n", said.Distinct()), Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        // The player's own costumes that came in before the costume check (user 2026-10-27: "check installed"): each one's
+        // package read in the background, one at a time with a rest between (nothing else waits meanwhile); then the faulty
+        // ones fixed, or switched off and locked, with the window waiting for that short part. Each is checked once (again
+        // only for a new version). With the game open, at the next start.
+        bool checkingOld;
+
+        async Task CheckOldCostumes()
+        {
+            if (checkingOld || !Game.IsGameFolder(game)) return;
+            checkingOld = true;
+            try
+            {
+                string g = game;
+                var faulty = new List<Installed>();
+                foreach (Installed r in await Task.Run(() => InstallCheck.Unchecked(g)))
+                {
+                    if (g != game || IsDisposed) return;
+                    Installed each = r;
+                    if (await Task.Run(() => InstallCheck.Faulty(g, each))) faulty.Add(r);
+                    await Task.Delay(5000);   // light on the PC: a rest between costumes
+                }
+                if (faulty.Count == 0) return;
+                while (locked && g == game && !IsDisposed) await Task.Delay(2000);   // after whatever is working now
+                if (g != game || IsDisposed || Game.IsRunning()) return;
+                var off = new List<string>();
+                int fixedOnes = 0;
+                PageWorking(true);
+                try
+                {
+                    foreach (Installed r in faulty)
+                    {
+                        SetStatus("Fixing " + Weight.Name(r) + " for online matches...");
+                        Installed each = r;
+                        try
+                        {
+                            string why = await Task.Run(() => InstallCheck.CheckInstalled(g, each));
+                            if (why != null) off.Add(Weight.Name(r)); else fixedOnes++;
+                        }
+                        catch (Exception ex) { BugReport.Noted("Costume check of " + Weight.Name(r) + ": " + ex.Message); }
+                    }
+                }
+                finally { PageWorking(false); }
+                ReloadKeeping(null);
+                if (fixedOnes + off.Count == 0) return;
+                MessageBox.Show(this, "Your costumes were checked for problems in online matches." +
+                                (fixedOnes > 0 ? "\n\n" + fixedOnes + (fixedOnes == 1 ? " was" : " were") + " fixed." : "") +
+                                (off.Count > 0 ? "\n\nSwitched off, with " + InstallCheck.CantBeFixed + ":\n    " + string.Join("\n    ", off) +
+                                                 "\n\nThey would make online matches go out of sync or crash the game. See " + InstallCheck.ListButton + "." : ""),
+                                Text, MessageBoxButtons.OK, off.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+            }
+            finally { checkingOld = false; }
         }
 
         FileSystemWatcher links;
@@ -523,12 +577,18 @@ namespace ExMoreStuff
         {
             gameLabel.Text = "Game folder: " + game;
             musicPage.SetGame(game);
-            // the label only as wide as its text (it's see-through, and would hide the Change link under it)
+            FitGameLabel();
+            ShowFolder();
+            ShowLockedButton();
+        }
+
+        // the label only as wide as its text (it's see-through, and would hide the Change link under it)
+        void FitGameLabel()
+        {
             int width = Math.Min(gameLabelRoom, TextRenderer.MeasureText(gameLabel.Text, gameLabel.Font).Width);
             gameLabel.Width = width;
             change.Location = new Point(gameLabel.Left + width + 2, gameLabel.Top);
             change.BringToFront();
-            ShowFolder();
         }
 
         void ShowTab(TabButton tab)
@@ -598,9 +658,19 @@ namespace ExMoreStuff
 
         bool IsInstalled(string key) { return installed.Any(r => r.Item.Key == key); }
 
+        // why an item can't be used on this PC: it failed its performance test, or it's a costume the check found problems in
+        // that can't be fixed (InstallCheck); null: it can
+        static string Unusable(Item item) { return PerfTest.Locked(item) ?? (item.IsCostume ? InstallCheck.Warning(item.Key) : null); }
+
+        // a locked costume's words, on its card and in the footer's list
+        static string SwitchedOff(string name, string why)
+        {
+            return name + " is switched off and can't be switched on: it has " + InstallCheck.CantBeFixed + ".\n\n" + why;
+        }
+
         bool Wanted(Item item)
         {
-            if (PerfTest.Locked(item) != null) return false;   // failed its test with a size warning: never switched on here
+            if (Unusable(item) != null) return false;   // failed its test with a size warning, or a costume that can't be fixed: never switched on here
             bool w;
             return wanted.TryGetValue(item.Key, out w) ? w : IsInstalled(item.Key);
         }
@@ -788,7 +858,7 @@ namespace ExMoreStuff
             var stagesLeft = new HashSet<string>(Stages.Codes.Concat(installed.Concat(removed).Where(r => r.Item.IsStage).Select(r => r.Item.Code))
                                                  .Concat(Overrides.Load(game).Select(o => Overrides.Prefix + o.Id)));
             // (nor one locked after failing its performance test)
-            Func<Installed, bool> usable = r => PerfTest.Locked(r.Item) == null;
+            Func<Installed, bool> usable = r => Unusable(r.Item) == null;
             foreach (var r in keepReplaced)
                 if (stagesLeft.Contains(r.Value) && !installed.Concat(removed).Any(x => x.Item.IsStage && x.Item.Code == r.Value && !usable(x))) wantedReplaced[r.Key] = r.Value;
             // costume replacements as chosen, but not by a costume that's gone or locked
@@ -830,6 +900,7 @@ namespace ExMoreStuff
             BuildRoster();
             if (openFighter != null) ShowCostumes(openFighter);
             BuildStages();
+            ShowLockedButton();
             packagesPage.SetGame(game);
             communityPage.SetGame(game);
             storagePage.SetGame(game);
@@ -1163,8 +1234,15 @@ namespace ExMoreStuff
                     communityPage.CreatorChanged(gb, on);
                 };
             }
-            string locked = PerfTest.Locked(item), pulledWhy = Catalog.PulledWhy(item);
-            if (pulledWhy != null)
+            string locked = PerfTest.Locked(item), pulledWhy = Catalog.PulledWhy(item), broken = item.IsCostume ? InstallCheck.Warning(item.Key) : null;
+            if (broken != null)
+            {
+                // the costume check found problems that can't be fixed (user 2026-10-27: "disable them. not allow users to use
+                // them anyway"): off, and it can't be switched on; a version that's fine or fixable unlocks it
+                card.Use.Enabled = false;
+                card.Warning.SetMessage(SwitchedOff(Weight.Name(record ?? off ?? new Installed { Item = item }), broken));
+            }
+            else if (pulledWhy != null)
             {
                 // pulled for now (the catalog's list, user 2026-10-22): off, and it can't be switched on until it's off the list
                 card.Use.Enabled = false;
@@ -1284,16 +1362,17 @@ namespace ExMoreStuff
             return card;
         }
 
-        // a pack card's picture: its colors' pictures side by side (the middle of each, up to 6), once they're read
+        // a pack card's picture: its colors' pictures side by side (the middle of each, up to 6), once they're read. All of
+        // them are read: the colors strip above shows each (user 2026-10-27: a pack of 14 showed pictures only up to its 6th)
         async Task PackPicture(List<Item> colors, ItemCard card)
         {
             var found = new List<Image>();
             foreach (Item c in colors)
             {
-                if (found.Count == 6) break;
                 Image image = await ReadPicture(c);
-                if (image != null) found.Add(image);
+                if (image != null && found.Count < 6) found.Add(image);
             }
+            if (costumeGrid != null && !costumeGrid.IsDisposed) costumeGrid.Invalidate();
             if (found.Count == 0 || card.IsDisposed) return;
             const int height = 384, slot = 128;
             var strip = new Bitmap(slot * found.Count, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
@@ -1437,6 +1516,8 @@ namespace ExMoreStuff
                                                           : "Test how it runs on this PC (" + Fighters.Name(item.Fighter) + " on both sides)");
             test.Click += async (s, e) => await Test(item, record);
             menu.Items.Add(test);
+            if (item.IsCostume && item.Slot >= Catalog.FirstCustomCostume && Game.IsGameFolder(game))
+                menu.Items.Add(SoundsLikeMenu(item));
             if (item.IsStage)   // its music heard in the game (user 2026-10-15; the test's benchmark plays none)
             {
                 var listen = new ToolStripMenuItem("Listen to stage");
@@ -1445,6 +1526,30 @@ namespace ExMoreStuff
             }
             menu.Closed += (s, e) => CharacterPicker.BeginDispose(menu);
             menu.Show(mark, new Point(0, mark.Height + 2));
+        }
+
+        // Sounds like (user 2026-10-27: "make bison have the mecha bison foley on his raiden costume"): the game costume a
+        // custom one plays as in rollback games, so it gets that costume's foley (Installer.SoundsLike). Wording awaits the
+        // user's OK.
+        ToolStripMenuItem SoundsLikeMenu(Item item)
+        {
+            int now = Installer.SoundsLike(game, item);
+            var sounds = new ToolStripMenuItem("Sounds like");   // ROLLBACK-NAME: only rollback games use it
+            for (int n = 0; n <= 3; n++)
+            {
+                int pick = n;
+                var choice = new ToolStripMenuItem(n == 0 ? "As usual" : CostumeLabel(item.Fighter, n)) { Checked = now == n };
+                choice.Click += (s, e) =>
+                {
+                    try { Installer.SetSoundsLike(game, item.Key, pick); }
+                    catch (Exception ex) { MessageBox.Show(this, "Couldn't change it: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+                    UpdateStatus(pick == 0 ? Fighters.Name(item.Fighter) + "'s costume sounds as usual in rollback games"
+                                           : "In rollback games it sounds like " + Fighters.Name(item.Fighter) + "'s " + CostumeLabel(item.Fighter, pick));   // ROLLBACK-NAME
+                };
+                sounds.DropDownItems.Add(choice);
+            }
+            DarkMenu.Style(sounds.DropDown);
+            return sounds;
         }
 
         // Listen to stage: the stage in the game with its own music for a minute (PerfTest.Listen); the player may close
@@ -1731,6 +1836,69 @@ namespace ExMoreStuff
 
         bool locked;
 
+        // the footer's buttons from the right: Warnings (the locked costumes), Apply changes, Disable everything,
+        // Refresh, the game folder; the status and the game folder's line take what's left
+        void LayOutFooter()
+        {
+            int right = ClientSize.Width - 18;
+            if (lockedCostumes.Visible)
+            {
+                lockedCostumes.Size = new Size(TextRenderer.MeasureText(lockedCostumes.Text, lockedCostumes.Font).Width + 24, 32);
+                lockedCostumes.Location = new Point(right - lockedCostumes.Width, 19);
+                right = lockedCostumes.Left - 8;
+            }
+            apply.Location = new Point(right - apply.Width, 19);
+            disableAll.Location = new Point(apply.Left - disableAll.Width - 8, 19);
+            refresh.Location = new Point(disableAll.Left - refresh.Width - 8, 19);
+            folderButton.Location = new Point(refresh.Left - folderButton.Width - 6, 12);
+            status.Bounds = new Rectangle(18, 14, folderButton.Left - 30, 20);
+            gameLabelRoom = folderButton.Left - 94;
+            gameLabel.Bounds = new Rectangle(18, 36, gameLabelRoom, 18);
+        }
+
+        // Every mod of this PC that's switched off and can't be switched on, with why, as its card's "!" says it (user
+        // 2026-10-27: Samus, pulled, wasn't in the list): a costume the check found problems in that can't be fixed, a mod
+        // pulled for now (Catalog.Pulled: only one that's here, installed or switched off), one that failed its test
+        List<string> LockedMods()
+        {
+            var said = new List<Tuple<string, string>>();
+            if (!Game.IsGameFolder(game)) return new List<string>();
+            var here = new HashSet<string>(installed.Concat(removed).Select(r => r.Item.Key));
+            foreach (Item item in AllItems().GroupBy(i => i.Key).Select(g => g.First()))
+            {
+                Installed record = installed.Concat(removed).FirstOrDefault(r => r.Item.Key == item.Key);
+                string name = Weight.Name(record ?? new Installed { Item = item });
+                string broken = item.IsCostume ? InstallCheck.Warning(item.Key) : null, pulledWhy = here.Contains(item.Key) ? Catalog.PulledWhy(item) : null, failed = PerfTest.Locked(item);
+                if (broken != null) said.Add(Tuple.Create(name, SwitchedOff(name, broken)));
+                else if (pulledWhy != null) said.Add(Tuple.Create(name, name + " is switched off for now: " + pulledWhy));
+                else if (failed != null) said.Add(Tuple.Create(name, name + " can't be switched on on this PC: " + failed + ". It could crash the game in a match. A new version of it can be tried again."));
+            }
+            return said.OrderBy(s => s.Item1, StringComparer.OrdinalIgnoreCase).Select(s => s.Item2).ToList();
+        }
+
+        // always there (user 2026-10-27: "have that button always appear. Warnings (0) if i have none")
+        void ShowLockedButton()
+        {
+            int count = LockedMods().Count;
+            string text = "⚠ Warnings (" + count + ")";
+            if (lockedCostumes.Visible && lockedCostumes.Text == text) return;
+            lockedCostumes.Text = text;
+            lockedCostumes.Visible = true;
+            tips.SetToolTip(lockedCostumes, count == 0 ? "Nothing is switched off." :
+                count + (count == 1 ? " mod is" : " mods are") + " switched off and can't be switched on. Click to see why.");
+            LayOutFooter();
+            FitGameLabel();
+        }
+
+        void ShowLockedCostumes()
+        {
+            var locked = LockedMods();
+            ShowLockedButton();
+            string text = locked.Count == 0 ? "Nothing is switched off." : string.Join("\n\n\n", locked);
+            using (var window = new TextWindow("Warnings", "These mods are switched off and can't be switched on, each for the reason below.", text))
+                window.ShowDialog(this);
+        }
+
         void Lock(bool on)
         {
             locked = on;
@@ -1977,11 +2145,15 @@ namespace ExMoreStuff
             await TestUntested();
         }
 
-        async Task AddFiles(string[] paths)
+        // bulk: Fix a folder of mods (OldModsPanel) adds one mod at a time through here: nothing is asked (a faulty costume is
+        // fixed or goes in with its warning, one in a taken seat or already installed is left out) and nothing is shown;
+        // what happened goes into bulk for the folder's own message
+        async Task AddFiles(string[] paths, BulkAdd bulk = null)
         {
             var added = new List<string>();
             var already = new List<string>();
             var notAdded = new List<string>();
+            var renames = new List<string>();   // color packs moved up to 30+ (RenumberColors)
             var before = Weight.Keys(game);
             string lastDone = null;   // what a mod built from its files went in as ("... is in: stage U05")
             foreach (string path in paths)
@@ -1991,6 +2163,8 @@ namespace ExMoreStuff
                 string g = game;
                 string twin = await Task.Run(() => Installer.AddedBefore(g, path));
                 if (twin != null) { already.Add(file + "  (" + twin + ")"); continue; }
+                string renumbered = await Task.Run(() => Installer.RenumberColors(path));   // colors 11-29 moved up to 30+ in the file (Tom 2026-10-26)
+                if (renumbered != null) renames.Add(file + ": " + renumbered);
                 List<Item> items = Installer.Packages(path);   // a color pack's zip: each of its colors (user 2026-10-18)
                 Item item = items.FirstOrDefault();
                 if (item == null)
@@ -2001,7 +2175,7 @@ namespace ExMoreStuff
                     string problem;
                     try { problem = await communityPage.InstallFile(path); }
                     finally { communityPage.Progress = null; }
-                    if (problem == null) { added.Add(file); lastDone = communityPage.LastDone; }
+                    if (problem == null) { added.Add(file + (communityPage.LastDone != null && communityPage.LastDone.Contains("(fixed: ") ? " (fixed)" : "")); lastDone = communityPage.LastDone; }
                     else
                     {
                         notAdded.Add(file + ": " + problem);
@@ -2014,33 +2188,64 @@ namespace ExMoreStuff
                 {
                     // Any slot or code: it only stops at files of that slot EX More Stuff didn't put there (InstallPackage).
                     string warning = Seats.Warning(item);   // the game's, taken on GameBanana, or not free: the player's call
+                    if (warning != null && bulk != null) { notAdded.Add(file + ": " + warning); continue; }
                     if (warning != null && MessageBox.Show(this, file + ": " + warning + ". Add it anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) { notAdded.Add(file + ": skipped"); continue; }
                     // a new color of a custom costume shows once that costume is in the game
                     string costume = item.Fighter + "_" + item.Slot.ToString("D2");
-                    if (item.IsColor && item.Slot >= Catalog.FirstCustomCostume && !File.Exists(Path.Combine(Game.FolderFor(game, item), costume + ".obj.emo")) &&
+                    if (item.IsColor && bulk == null && item.Slot >= Catalog.FirstCustomCostume && !File.Exists(Path.Combine(Game.FolderFor(game, item), costume + ".obj.emo")) &&
                         MessageBox.Show(this, file + ": " + Fighters.Name(item.Fighter) + " " + item.Slot.ToString("D2") + " isn't in the game, so this color won't show until it is. Add it anyway?",
                             Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) { notAdded.Add(file + ": skipped"); continue; }
                     Item there = items.FirstOrDefault(i => installed.Concat(removed).Any(r => r.Item.Key == i.Key));
+                    if (there != null && bulk != null) { already.Add(file + "  (" + Describe(there) + ")"); continue; }
                     if (there != null && MessageBox.Show(this, file + ": " + Describe(there) + (items.Count > 1 ? " and others in it are" : " is") + " already installed. Replace " +
                             (items.Count > 1 ? "them" : "it") + " with this one?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) { notAdded.Add(file + ": skipped"); continue; }
                     // a copy in Mods\, so the player's file may move; one picked from inside Mods\ is used as it is, and stays theirs
                     string kept = AppFolders.KeepPackage(path, item);
+                    bool theirs = string.Equals(Path.GetFullPath(kept), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase);
+                    // a costume: its check (InstallCheck), nothing asked. A fix goes into EX More Stuff's copy, or beside the
+                    // player's own zip when it's that one (picked from inside Mods\), and the fixed copy is EX More Stuff's;
+                    // one that can't be fixed goes in switched off and locked.
+                    string said = null, faults = null;
+                    if (item.IsCostume)
+                    {
+                        string k = kept, g2 = game;
+                        bool own = !theirs;
+                        string use = await Task.Run(() => InstallCheck.Decide(g2, k, own, out said, out faults));
+                        if (use != kept) { kept = use; theirs = false; }
+                    }
                     foreach (Item each in items)
-                        Installer.InstallPackage(game, each, kept, "file", string.Equals(Path.GetFullPath(kept), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase));
+                    {
+                        Installer.InstallPackage(game, each, kept, "file", theirs);
+                        if (!each.IsCostume) continue;
+                        InstallCheck.SetWarning(each.Key, faults);
+                        if (faults != null) Installer.Remove(game, each.Key);   // it can't be fixed: switched off and locked
+                    }
                     Installer.AdoptPackages(game);   // one picked from inside Mods\ goes to its folder there
                     Reload();
-                    added.Add(file);
+                    if (faults != null) notAdded.Add(file + ": switched off, it has problems that can't be fixed (see " + InstallCheck.ListButton + ")");
+                    else added.Add(file + (said != null ? " (" + said + ")" : ""));
                 }
                 catch (Exception ex) { notAdded.Add(file + ": " + ex.Message); }
             }
             Reload();
             string round = added.Count > 0 ? RoundMusicMod() : null;
             var notes = Weight.New(game, before);   // size warnings for what went in: they inform, nothing was stopped
-            if (paths.Length > 1 || already.Count > 0 || notAdded.Count > 0 || round != null || notes.Count > 0)
+            if (bulk != null)
+            {
+                bulk.Added.AddRange(added);
+                bulk.Already.AddRange(already);
+                bulk.NotAdded.AddRange(notAdded);
+                bulk.Notes.AddRange(notes);
+                if (round != null) bulk.Notes.Add(round);
+                return;
+            }
+            if (paths.Length > 1 || already.Count > 0 || notAdded.Count > 0 || round != null || notes.Count > 0 || renames.Count > 0 ||
+                added.Any(a => a.Contains("(fixed: ")))   // a costume fixed (InstallCheck): said
             {
                 string report = (added.Count > 0 ? "Added (" + added.Count + "):\n    " + string.Join("\n    ", added) : "Nothing added.") +
                                 (already.Count > 0 ? "\n\nAlready added before, left as they are (" + already.Count + "):\n    " + string.Join("\n    ", already) : "") +
                                 (notAdded.Count > 0 ? "\n\nNot added (" + notAdded.Count + "):\n    " + string.Join("\n    ", notAdded) : "") +
+                                (renames.Count > 0 ? "\n\nRenumbered in the file:\n    " + string.Join("\n    ", renames) : "") +
                                 (round != null ? "\n\nNote: " + round + "." : "") +
                                 (notes.Count > 0 ? "\n\nNote: " + string.Join("\n\n", notes) : "");
                 if (notAdded.Count > 0) BugReport.Noted("Add Mod From File, not added: " + string.Join("; ", notAdded));
@@ -2065,10 +2270,22 @@ namespace ExMoreStuff
                 {
                     string file = Path.GetFileName(path);
                     if (Docked.Has(path)) { notDocked.Add(file + ": it's docked already"); continue; }
-                    if (Installer.Package(path) != null) { Docked.Add(path); docked.Add(file); continue; }
+                    string renumbered = await Task.Run(() => Installer.RenumberColors(path));   // colors 11-29 moved up to 30+ in the file (Tom 2026-10-26)
+                    Item package = Installer.Package(path);
+                    if (package != null)
+                    {
+                        // a costume: its check; a fixed copy goes beside the player's zip, and that's what's docked (one
+                        // that can't be fixed is docked as it is, for its maker to work on, and said)
+                        string said = null, faults = null, use = path, p = path;
+                        if (package.IsCostume) use = await Task.Run(() => InstallCheck.Decide(g, p, false, out said, out faults));
+                        Docked.Add(use);
+                        docked.Add(file + (use != path ? " (as " + Path.GetFileName(use) + ")" : "") + (renumbered != null ? ": " + renumbered : "") + (said != null ? ": " + said : "") +
+                                   (faults != null ? ": it has problems that can't be fixed, so it can't go into the game as it is" : ""));
+                        continue;
+                    }
                     try
                     {
-                        var made = await Task.Run(() => ModFile.Dock(g, path, text => BeginInvoke((Action)(() => SetStatus(text)))));
+                        var made = await Task.Run(() => ModFile.Dock(g, path, text => BeginInvoke((Action)(() => SetStatus(text))), true));
                         if (made.Into.Count > 0) docked.Add(file + " (as " + string.Join(", ", made.Into) + ")");
                         foreach (string problem in made.Problems) notDocked.Add(file + ": " + problem);
                     }
@@ -2080,9 +2297,10 @@ namespace ExMoreStuff
             openTool = null;
             ShowTab(advancedTab);
             advancedPage.AutoScrollPosition = Point.Empty;
-            if (notDocked.Count > 0)
+            if (notDocked.Count > 0 || docked.Any(d => d.Contains(" are now ") || d.Contains("fixed: ") || d.Contains("couldn't be fixed")))   // a color pack renumbered (RenumberColors), a costume fixed: said
                 MessageBox.Show(this, (docked.Count > 0 ? "Docked (" + docked.Count + "):\n    " + string.Join("\n    ", docked) : "Nothing docked.") +
-                                "\n\nNot docked (" + notDocked.Count + "):\n    " + string.Join("\n    ", notDocked), Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                (notDocked.Count > 0 ? "\n\nNot docked (" + notDocked.Count + "):\n    " + string.Join("\n    ", notDocked) : ""), Text, MessageBoxButtons.OK,
+                                notDocked.Count > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
             if (docked.Count > 0) UpdateStatus("Docked " + docked.Count + " for edits");
         }
 
@@ -2222,7 +2440,7 @@ namespace ExMoreStuff
             var grid = new SeatGrid { Fighter = item.Fighter, Margin = Padding.Empty };
             if (item.IsColor)
             {
-                grid.First = Catalog.FirstCustomColor;
+                grid.First = Catalog.FirstColor(item.Slot);
                 grid.Last = Catalog.LastColor;
                 grid.Takes = files.Select(f => f.Item.Color - first).OrderBy(t => t).ToArray();
                 string folder = Game.IsGameFolder(game) ? Game.FolderFor(game, item) : null;
@@ -2297,9 +2515,10 @@ namespace ExMoreStuff
             var colors = files.OrderBy(f => f.Item.Color).ToList();
             int shift = start - colors[0].Item.Color, last = colors[colors.Count - 1].Item.Color;
             if (shift == 0) return;
-            if (start < Catalog.FirstCustomColor || last + shift > Catalog.LastColor)
+            int lowest = Catalog.FirstColor(colors[0].Item.Slot);
+            if (start < lowest || last + shift > Catalog.LastColor)
             {
-                MessageBox.Show(this, "Can't change it: its colors would go past " + Catalog.FirstCustomColor + "-" + Catalog.LastColor + ".", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, "Can't change it: its colors would go past " + lowest + "-" + Catalog.LastColor + ".", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             string to = "colors " + start + "-" + (last + shift);
@@ -2414,7 +2633,7 @@ namespace ExMoreStuff
                 var j = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(EverythingFile));
                 if (!string.Equals(Convert.ToString(j["game"]), game, StringComparison.OrdinalIgnoreCase)) return null;
                 var items = AllItems().GroupBy(i => i.Key).ToDictionary(g => g.Key, g => g.First());
-                Func<Item, bool> usable = i => PerfTest.Locked(i) == null;
+                Func<Item, bool> usable = i => Unusable(i) == null;
                 var on = ((System.Collections.ArrayList)j["on"]).Cast<object>().Select(Convert.ToString)
                          .Where(k => items.ContainsKey(k) && usable(items[k]) && !IsInstalled(k)).ToList();
                 var stages = new HashSet<string>(Stages.Codes.Concat(AllItems().Where(i => i.IsStage && usable(i)).Select(i => i.Code)).Concat(Overrides.Load(game).Select(o => Overrides.Prefix + o.Id)));

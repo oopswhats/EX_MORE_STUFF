@@ -46,6 +46,25 @@ namespace ExMoreStuff
             Installer.Rename(game, item.Key, "");
             Check(!File.Exists(nameFile) && Installer.Load(game)[0].Shown == "", "an empty name removes the file");
             Installer.Rename(game, item.Key, "Monster Hunter");
+            // sounds like (user 2026-10-27): the game costume it plays as in rollback games, for its foley
+            string foley = Path.Combine(game, "patch_ae2_tu3", "battle", "chara", "JHA", "JHA_71.foley.txt");
+            Check(Installer.SoundsLike(game, item) == 0 && !File.Exists(foley), "no sounds like at first");
+            Installer.SetSoundsLike(game, item.Key, 3);
+            Check(File.ReadAllText(foley) == "3" && Installer.SoundsLike(game, item) == 3 && Installer.Load(game)[0].Files.Count(f => f.EndsWith("JHA_71.foley.txt")) == 1,
+                  "sounds like Alternate 2: JHA_71.foley.txt says 3, listed with its files");
+            Installer.InstallPackage(game, Installer.Inspect(package), package, "file");
+            Check(Installer.SoundsLike(game, item) == 3, "an update keeps it");
+            Installer.SetSoundsLike(game, item.Key, 0);
+            Check(!File.Exists(foley) && Installer.SoundsLike(game, item) == 0, "as usual removes the file");
+            Installer.SetSoundsLike(game, item.Key, 2);
+            Installer.Remove(game, item.Key);
+            Check(!File.Exists(foley), "remove takes it too");
+            string extra = Catalog.FirstColor(71).ToString("D2");   // 11 once Ember takes a custom costume's 11-29, 30 until then
+            string withFoley = Zip(game, "With foley", files.Concat(new[] { "JHA_71.foley.txt", "JHA_71_" + extra + ".col.emb", "JHA_71_" + extra + ".obj.emm" }).ToArray());
+            Check(Installer.Package(withFoley) != null, "a package may carry its own .foley.txt and a custom costume's color " + extra);
+            Installer.InstallPackage(game, item, package, "file");
+            Check(Installer.SoundsLike(game, item) == 2 && File.ReadAllText(foley) == "2", "switched back on, it still sounds like Alternate 1");
+            Installer.Rename(game, item.Key, "Monster Hunter");
             Installer.Remove(game, item.Key);
             Check(!File.Exists(nameFile) && !Directory.Exists(Path.GetDirectoryName(nameFile)), "remove takes the name file and the folder");
 

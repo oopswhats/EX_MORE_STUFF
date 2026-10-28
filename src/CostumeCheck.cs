@@ -52,6 +52,7 @@ namespace ExMoreStuff
             // Kind: DESYNC, DESYNC?, IK, EFFECTS, WHITE, EMM>CAP, FILES, COLORS, SLOT, STOCK, BROKEN, PALETTE, SUBMESHES, UNREAD
             public string Kind, Text;
             public bool Fixable;
+            public int Bones;   // DESYNC, DESYNC?: the bones moved or small against the stand-in (InstallCheck says how many)
         }
 
         public sealed class Result
@@ -62,7 +63,7 @@ namespace ExMoreStuff
         }
 
         // what puts a costume under "Need a fix"
-        static readonly string[] Faults = { "FILES", "EMM>CAP", "COLORS", "SLOT", "BROKEN", "PALETTE", "SUBMESHES", "UNREAD" };
+        public static readonly string[] Faults = { "FILES", "EMM>CAP", "COLORS", "SLOT", "BROKEN", "PALETTE", "SUBMESHES", "UNREAD" };
 
         // ---- reading the files ----
 
@@ -284,8 +285,19 @@ namespace ExMoreStuff
             int textures = I32(d, b + 4), list = I32(d, b + 12), vcount = U16(d, b + 16), stride = U16(d, b + 18);
             int vlist = I32(d, b + 20), subs = U16(d, b + 26), sublist = I32(d, b + 28);
             if (textures < 0 || textures > 4096) throw new InvalidDataException(where + " has " + textures + " texture slots");
+            // only the slots its submeshes use: the game reads no other (Raiden Bison's part 12 lists 6, slots 2-5 are junk,
+            // only slot 0 is used, and it plays fine; flagged as damaged before, user 2026-10-27)
+            var used = new HashSet<int>();
+            for (int s = 0; s < subs; s++)
+            {
+                Need(d, (long)b + sublist + s * 4L, 4, where + "'s submesh list runs past the end");
+                long sp = (long)b + I32(d, b + sublist + s * 4);
+                Need(d, sp, 54, where + "'s submesh " + s + " is past the end");
+                used.Add(U16(d, (int)sp + 16));
+            }
             for (int t = 0; t < textures; t++)
             {
+                if (!used.Contains(t)) continue;
                 Need(d, (long)b + list + t * 4L, 4, where + "'s texture list runs past the end");
                 long tp = (long)b + I32(d, b + list + t * 4);
                 Need(d, tp, 4, where + "'s texture slot " + t + " is past the end");
@@ -623,6 +635,7 @@ namespace ExMoreStuff
                         .Where(x => x.bones.Count > 0).Select(x => x.size + " " + x.bones.Count + ": " + string.Join(", ", x.bones.Select(d => d.Bone + " " + d.What))));
                     string clean = string.Join(",", per.Where(v => v.Value.Count == 0).Select(v => v.Key.ToString("D2")));
                     add(level, "vs stand-in " + key.ToString("D2") + ": " + text + "; clean vs " + (clean == "" ? "none" : clean), (level == "DESYNC" || level == "DESYNC?") && key == 1);
+                    r.Findings.Last().Bones = per[key].Count(d => d.Size != "noise");
                 }
                 List<Difference> first;
                 var mine = verdicts.TryGetValue(1, out first) ? first.Where(d => d.Level != "EFFECTS").ToList() : new List<Difference>();
@@ -919,7 +932,7 @@ namespace ExMoreStuff
                 }
                 string materials = FixMaterials(game, fighter, stem, files);
                 if (materials != null) done.Add(stem + ": " + materials);
-                foreach (string part in new[] { ".shd.emo", ".nml.emb", ".bsr" })
+                foreach (string part in fighter == "BLR" ? new[] { ".shd.emo", ".nml.emb", ".bsr", ".clw.emo", ".msk.emo" } : new[] { ".shd.emo", ".nml.emb", ".bsr" })
                 {
                     if (files.ContainsKey(stem + part)) continue;
                     string from = SkinImport.GameFile(game, fighter, fighter + "_01" + part);

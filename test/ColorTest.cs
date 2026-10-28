@@ -88,6 +88,24 @@ namespace ExMoreStuff
             Installed skr = Installer.Load(game).Single(r => r.Item.Fighter == "SKR");
             Check(result.Problems.Count == 0 && skr.Item.IsColor && skr.Item.Slot == 10 && skr.Item.Color == 40 && skr.Item.Title.StartsWith("Slot 10 color 40"), "Sakura 10 color 40");
             Check(File.ReadAllBytes(Path.Combine(chara, "SKR", "SKR_10_40.png")).SequenceEqual(new byte[] { 9 }), "with its own picture");
+            // a custom costume has only its ten: its new colors may be 11-99 once Ember takes them; the game's costumes' stay
+            // 30-99 (user 2026-10-27). Until then (v1.0) 30-99 for every costume, and a custom costume's 11 is moved up too.
+            string eleven = Path.Combine(packages, "eleven.zip");
+            using (ZipArchive z = ZipFile.Open(eleven, ZipArchiveMode.Create))
+                foreach (string n in new[] { "SKR_10_11.col.emb", "SKR_10_11.obj.emm" }) using (Stream s = z.CreateEntry(n).Open()) s.Write(col, 0, col.Length);
+            if (!Catalog.CustomColorsFromEleven)
+            {
+                Check(Catalog.FirstColor(10) == 30 && Catalog.FirstColor(1) == 30, "every costume's new colors from 30 (as today's Ember)");
+                Check(Installer.RenumberColors(eleven) != null && Installer.Packages(eleven).Select(i => i.Color).SequenceEqual(new[] { 30 }), "a custom costume's color 11 is moved up to 30");
+            }
+            else
+            {
+            Check(Catalog.FirstColor(10) == 11 && Catalog.FirstColor(8) == 11 && Catalog.FirstColor(1) == 30 && Catalog.FirstColor(7) == 30, "custom costumes' colors from 11, the game's from 30");
+            Check(ModFile.FindColors(new[] { new KeyValuePair<string, byte[]>("SKR_10_11.col.emb", col), new KeyValuePair<string, byte[]>("RYU_01_11.col.emb", col) })
+                  .Select(c => c.Fighter + c.Costume + "_" + c.Number).SequenceEqual(new[] { "SKR10_11" }), "color 11 of custom costume 10 is a new color; of the game's costume 1 it isn't");
+            Check(ModFile.FreeColor(game, "SKR", 10, 0) == 11 && ModFile.FreeColor(game, "RYU", 1, 11) == 32, "a custom costume's first free color is 11; the game's costume asking for 11 gets one from 30");
+            Check(Installer.RenumberColors(eleven) == null && Installer.Packages(eleven).Select(i => i.Color).SequenceEqual(new[] { 11 }), "a custom costume's color 11 is a package as it is, not renumbered");
+            }
 
             Console.WriteLine("A pack: its colors of one costume in one zip, one install (user 2026-10-18)");
             files = new List<KeyValuePair<string, byte[]>>();

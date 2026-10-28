@@ -19,6 +19,7 @@ namespace ExMoreStuff
         public string Source;               // "catalog", or "file" for a player's own package
         public string Package;              // a player's own package: the zip it came from, to switch it back on
         public string Shown;                // its name in EMBER's menus (the player can rename it), in <prefix>.txt; null: never set
+        public int SoundsLike;              // a custom costume's: the game costume (1-3) it plays as in rollback games, in <prefix>.foley.txt; 0: as usual
         public bool Theirs;                 // Package is the player's own file (picked from inside Mods\, so not copied): deleting leaves it
         public List<string> Files = new List<string>();
     }
@@ -52,6 +53,7 @@ namespace ExMoreStuff
                     if (j.ContainsKey("package") && j["package"] != null) record.Package = Convert.ToString(j["package"]);
                     if (j.ContainsKey("shown") && j["shown"] != null) record.Shown = Convert.ToString(j["shown"]);
                     if (j.ContainsKey("theirs") && j["theirs"] is bool) record.Theirs = (bool)j["theirs"];
+                    if (j.ContainsKey("sounds_like") && j["sounds_like"] is int) record.SoundsLike = (int)j["sounds_like"];
                     if (j.ContainsKey("files") && j["files"] is System.Collections.ArrayList)
                         foreach (object f in (System.Collections.ArrayList)j["files"]) record.Files.Add(Convert.ToString(f));
                     result.Add(record);
@@ -70,6 +72,7 @@ namespace ExMoreStuff
                 j["package"] = r.Package;
                 j["shown"] = r.Shown;
                 if (r.Theirs) j["theirs"] = true;
+                if (r.SoundsLike > 0) j["sounds_like"] = r.SoundsLike;
                 j["files"] = r.Files;
                 return j;
             };
@@ -120,6 +123,46 @@ namespace ExMoreStuff
             record.Files.Add(relative);
         }
 
+        /// <summary>The game costume (1-3) an installed custom costume plays as in rollback games, for its foley (Bison's
+        /// Alternate 2 clanks like a robot): its &lt;CHR&gt;_&lt;NN&gt;.foley.txt. 0: not chosen (the usual stand-in).</summary>
+        public static int SoundsLike(string game, Item item)   // ROLLBACK-NAME: read by EMBER (CustomContentFiles)
+        {
+            try
+            {
+                string text = File.ReadAllText(Path.Combine(Game.FolderFor(game, item), item.Prefix + ".foley.txt")).Trim();
+                return text.Length > 0 && text[0] >= '1' && text[0] <= '3' ? text[0] - '0' : 0;
+            }
+            catch (Exception) { return 0; }
+        }
+
+        /// <summary>Sets SoundsLike (0 removes it), from the game's next start. The file isn't the game's, so it may run.</summary>
+        public static void SetSoundsLike(string game, string key, int costume)
+        {
+            var records = Load(game);
+            Installed record = records.FirstOrDefault(r => r.Item.Key == key);
+            if (record == null || !record.Item.IsCostume) return;
+            record.SoundsLike = costume >= 1 && costume <= 3 ? costume : 0;
+            WriteSoundsLike(game, record, true);
+            Save(game, records);
+        }
+
+        // Writes the record's choice (a package's own .foley.txt stays when the player made none); `clear`: none removes it.
+        static void WriteSoundsLike(string game, Installed record, bool clear)
+        {
+            string path = Path.Combine(Game.FolderFor(game, record.Item), record.Item.Prefix + ".foley.txt");
+            string relative = path.Substring(Game.PatchFolder(game).Length + 1);
+            if (record.SoundsLike == 0)
+            {
+                if (!clear) return;
+                record.Files.RemoveAll(f => string.Equals(f, relative, StringComparison.OrdinalIgnoreCase));
+                if (File.Exists(path)) File.Delete(path);
+                return;
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            SafeFile.WriteAllText(path, record.SoundsLike.ToString());
+            if (!record.Files.Any(f => string.Equals(f, relative, StringComparison.OrdinalIgnoreCase))) record.Files.Add(relative);
+        }
+
         // Renames an installed item in EMBER's menus (from its next start). The file isn't the game's, so the game may run.
         public static void Rename(string game, string key, string name)
         {
@@ -148,7 +191,7 @@ namespace ExMoreStuff
             if (item.IsColor) return new Regex("^" + Regex.Escape(item.Fighter + "_" + item.Slot.ToString("D2")) + @"_\d\d\.(col\.emb|obj\.emm|png)$", RegexOptions.IgnoreCase);
             return item.IsStage
                 ? new Regex("^(" + p + @"\.(emz|tex\.emz|png|jpg)|BGM_" + Regex.Escape(item.Code) + @"[23]?\.csb)$", RegexOptions.IgnoreCase)
-                : new Regex("^" + p + @"(\.(obj\.emo|shd\.emo|nml\.emb|bsr|csb|png)|_(E|J)\.csb|_(0[1-9]|10|[3-9]\d)\.(col\.emb|obj\.emm|png))$", RegexOptions.IgnoreCase);   // _E/_J.csb: its voice; 30-99: its extra colors
+                : new Regex("^" + p + @"(\.(obj\.emo|shd\.emo|nml\.emb|bsr|csb|png|clw\.emo|msk\.emo|foley\.txt)|_(E|J)\.csb|_(" + (Catalog.FirstColor(item.Slot) < Catalog.FirstCustomColor ? @"0[1-9]|[1-9]\d" : @"0[1-9]|10|[3-9]\d") + @")\.(col\.emb|obj\.emm|png))$", RegexOptions.IgnoreCase);   // _E/_J.csb: its voice; 30-99: its extra colors; .clw/.msk.emo: Vega's claw and mask (the game loads them for every Vega costume: without them his match never loads, 2026-10-26)
         }
 
         // Why a package can't be installed as `item`, or null.
@@ -256,7 +299,8 @@ namespace ExMoreStuff
                 string package = source == "file" ? Path.GetFullPath(zipPath) : null;
                 Func<Installed, bool> same = r => r != null && r.Theirs && r.Package != null && package != null && string.Equals(Path.GetFullPath(r.Package), package, StringComparison.OrdinalIgnoreCase);
                 theirs = package != null && (theirs || same(old) || same(shelved));
-                var record = new Installed { Item = item, Source = source, Package = package, Shown = shown, Theirs = theirs };
+                int soundsLike = old != null && old.SoundsLike > 0 ? old.SoundsLike : shelved != null ? shelved.SoundsLike : 0;   // the player's choice stays too
+                var record = new Installed { Item = item, Source = source, Package = package, Shown = shown, Theirs = theirs, SoundsLike = soundsLike };
                 foreach (ZipArchiveEntry e in files)
                 {
                     string target = Path.Combine(FolderFor(game, item, e.Name), e.Name);
@@ -265,6 +309,7 @@ namespace ExMoreStuff
                     record.Files.Add(target.Substring(patch.Length + 1));
                 }
                 WriteName(game, record);
+                if (item.IsCostume) WriteSoundsLike(game, record, false);
                 records.Add(record);
                 Save(game, records, removed);
             }
@@ -478,6 +523,41 @@ namespace ExMoreStuff
             catch (Exception) { return null; }   // not a zip, or not readable as one
         }
 
+        /// <summary>A color pack numbered past the game's 10 below 30 (Tom 2026-10-26: colors 13-32, and only 30-32 were
+        /// found, the rest skipped without a word): its extra colors moved up together, order and gaps kept, so the lowest is
+        /// 30 (13-32 -> 30-49), in the zip itself (its .col.emb, .obj.emm and .png each). Colors 1-10 stay. Returns what
+        /// moved ("colors 13-32 are now 30-49"), or null: nothing to move, not a zip, or they wouldn't fit under 100.</summary>
+        public static string RenumberColors(string path)
+        {
+            try
+            {
+                if (!string.Equals(Path.GetExtension(path), ".zip", StringComparison.OrdinalIgnoreCase)) return null;
+                var color = new Regex(@"^([A-Za-z]{3}_\d\d)_(\d\d)\.(col\.emb|obj\.emm|png)$", RegexOptions.IgnoreCase);
+                using (ZipArchive zip = ZipFile.Open(path, ZipArchiveMode.Update))
+                {
+                    var files = zip.Entries.Where(e => !e.FullName.EndsWith("/")).Select(e => new { Entry = e, Match = color.Match(e.Name) })
+                        .Where(f => f.Match.Success && Catalog.FirstColor(int.Parse(f.Match.Groups[1].Value.Substring(4))) == Catalog.FirstCustomColor).ToList();   // a custom costume's 11-29 are fine
+                    var extras = files.Select(f => int.Parse(f.Match.Groups[2].Value)).Where(n => n > 10).Distinct().OrderBy(n => n).ToList();
+                    if (extras.Count == 0 || extras[0] >= Catalog.FirstCustomColor) return null;
+                    int shift = Catalog.FirstCustomColor - extras[0];
+                    if (extras.Last() + shift > Catalog.LastColor) return null;
+                    foreach (var f in files)
+                    {
+                        int n = int.Parse(f.Match.Groups[2].Value);
+                        if (n <= 10) continue;
+                        string name = f.Match.Groups[1].Value + "_" + (n + shift).ToString("D2") + "." + f.Match.Groups[3].Value;
+                        string full = f.Entry.FullName.Substring(0, f.Entry.FullName.Length - f.Entry.Name.Length) + name;
+                        ZipArchiveEntry moved = zip.CreateEntry(full);
+                        using (Stream from = f.Entry.Open()) using (Stream to = moved.Open()) from.CopyTo(to);
+                        f.Entry.Delete();
+                    }
+                    return "colors " + extras[0] + "-" + extras.Last() + " are now " + (extras[0] + shift) + "-" + (extras.Last() + shift) +
+                           " (extra colors" + (Catalog.CustomColorsFromEleven ? " of the game's costumes" : "") + " are numbered " + Catalog.FirstCustomColor + "-" + Catalog.LastColor + ")";
+                }
+            }
+            catch (Exception) { return null; }   // not a zip, or not writable: left as it is
+        }
+
         /// <summary>Every item a package installs as: one, or a color pack's colors of one costume in one zip (user 2026-10-18:
         /// "one install hold all the colors"), an item each (a color switched off by itself is out of the game, its files
         /// still in the zip). None: not a package.</summary>
@@ -564,7 +644,8 @@ namespace ExMoreStuff
                         item.Type = "stage"; item.Fighter = ""; item.Code = stage.Groups[1].Value.ToUpperInvariant();
                         return item;
                     }
-                    if (color.Success && Fighters.IsCode(color.Groups[1].Value.ToUpperInvariant()) && int.Parse(color.Groups[3].Value) >= Catalog.FirstCustomColor)
+                    if (color.Success && Fighters.IsCode(color.Groups[1].Value.ToUpperInvariant()) && int.Parse(color.Groups[3].Value) >= Catalog.FirstColor(int.Parse(color.Groups[2].Value)) &&
+                        !zip.Entries.Any(x => string.Equals(x.Name, color.Groups[1].Value + "_" + color.Groups[2].Value + ".obj.emo", StringComparison.OrdinalIgnoreCase)))   // a costume's own extra colors: the costume
                     {
                         item.Type = "color"; item.Fighter = color.Groups[1].Value.ToUpperInvariant();
                         item.Slot = int.Parse(color.Groups[2].Value); item.Color = int.Parse(color.Groups[3].Value);
