@@ -589,12 +589,17 @@ namespace ExMoreStuff
             try { return SevenZip.Read(archive, name => Keep(name)).Where(f => f.Value.LongLength <= 512L * 1024 * 1024).ToList(); }
             catch (NotSupportedException) { return null; }
         }
-        // an old-style rar's kept files by EX More Stuff's own reader (Windows 10's tar can't undo RAR's filters, user
-        // 2026-10-16); null when it isn't one or uses what the reader doesn't know (then tar tries)
+        // a rar's kept files by EX More Stuff's own readers (Windows 10's tar can't undo old RAR's filters, user 2026-10-16;
+        // some Windows have no tar at all, user 2026-10-29: RAR5 too); null when it isn't one or uses what the readers don't
+        // know (then tar tries)
         static List<KeyValuePair<string, byte[]>> RarFiles(string archive)
         {
-            if (!Rar.Is(archive)) return null;
-            try { return Rar.Read(archive, name => Keep(name)); }
+            try
+            {
+                if (Rar.Is(archive)) return Rar.Read(archive, name => Keep(name));
+                if (Rar5.Is(archive)) return Rar5.Read(archive, name => Keep(name));
+                return null;
+            }
             catch (NotSupportedException) { return null; }
         }
         // the only kinds of file taken out of a mod: the game's costume and stage files (all data), pictures, and archives inside it.
@@ -609,8 +614,8 @@ namespace ExMoreStuff
             return "*" + string.Concat(ending.Select(ch => char.IsLetter(ch) ? "[" + char.ToLowerInvariant(ch) + char.ToUpperInvariant(ch) + "]" : ch.ToString()));
         }
 
-        /// <summary>The files of the kinds EX More Stuff uses in an archive (zip; 7z by SevenZip; rar, and 7z methods SevenZip
-        /// doesn't know, through Windows' own tar), by their paths inside; an archive inside it is opened too (its files as
+        /// <summary>The files of the kinds EX More Stuff uses in an archive (zip; 7z by SevenZip; rar by Rar and Rar5; 7z methods SevenZip
+        /// and rar features they don't know, through Windows' own tar), by their paths inside; an archive inside it is opened too (its files as
         /// "inner.7z/...", as GameBanana lists them).</summary>
         public static List<KeyValuePair<string, byte[]>> Unpack(string archive, string workFolder, int depth = 0)
         {
