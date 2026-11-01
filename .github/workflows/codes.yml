@@ -23,7 +23,7 @@ jobs:
           $csc = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -find "MSBuild\**\Bin\Roslyn\csc.exe" | Select-Object -First 1
           $fw = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319"
           $refs = "System", "System.Core", "System.Drawing", "System.Windows.Forms", "System.IO.Compression", "System.IO.Compression.FileSystem",
-                  "System.Net.Http", "System.Web.Extensions", "Microsoft.VisualBasic" | ForEach-Object { "-r:$fw\$_.dll" }
+                  "System.Net.Http", "System.Web.Extensions", "Microsoft.VisualBasic", "WPF\PresentationCore", "WPF\WindowsBase", "System.Xaml" | ForEach-Object { "-r:$fw\$_.dll" }
           & $csc -nologo -target:exe -platform:anycpu -langversion:7.3 -out:tracker.exe -main:ExMoreStuff.CodeTracker @refs tools\CodeTracker.cs src\*.cs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Read GameBanana
