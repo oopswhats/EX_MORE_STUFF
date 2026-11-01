@@ -8,7 +8,7 @@ namespace ExMoreStuff
 {
     // A game stage replaced by another on this PC: the game finds stages by code, so a converted copy of the other
     // stage (StagePack.Recode) is put in the patch folder under the replaced stage's file names. Only this PC sees
-    // it, online too; the music and everything else stay the replaced stage's. Nothing is lost: a file already in
+    // it, online too; a custom stage brings its own music, everything else stays the replaced stage's. Nothing is lost: a file already in
     // the patch folder (the game's own update, or a player's port) is moved to ex_more_stuff_backup first and comes
     // back when the replacement is switched off. Ember needs nothing for this.
     class Replacement
@@ -87,7 +87,7 @@ namespace ExMoreStuff
             return null;
         }
 
-        public static void Replace(string game, string stage, string source, bool withMusic = false)
+        public static void Replace(string game, string stage, string source)
         {
             if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
             var list = Load(game);
@@ -108,10 +108,15 @@ namespace ExMoreStuff
                 if (from == null) throw new FileNotFoundException("STG_" + source + suffix + " wasn't found");
                 made[StagePack.RelativePath(stage, suffix)] = StagePack.Recode(File.ReadAllBytes(from), source, stage);
             }
-            // `withMusic` (a performance test; user 2026-10-15): a custom stage's own music in the game (BGM_<code>.csb from
-            // its package or the Music page) plays in its place too; the Stages page's replacements keep the stage's music
-            string music = withMusic && over == null && Stages.IsCustomCode(source) ? MusicBank.PatchFile(game, "BGM_" + source + ".csb") : null;
-            if (music != null && File.Exists(music)) made[Path.Combine("battle", "sound", "bgm", "BGM_" + stage + ".csb")] = File.ReadAllBytes(music);
+            // a custom stage's own music in the game (BGM_<code>.csb from its package or the Music page, and its rounds 2 and 3
+            // when it has them) plays in the stage's place too (user 2026-10-30: "it should play the mod stages music when you
+            // replace a vanilla stage with a mod stage"; before, only the performance test did); one without stays the stage's
+            if (over == null && Stages.IsCustomCode(source))
+                foreach (string round in new[] { "", "2", "3" })
+                {
+                    string music = MusicBank.PatchFile(game, "BGM_" + source + round + ".csb");
+                    if (File.Exists(music)) made[Path.Combine("battle", "sound", "bgm", "BGM_" + stage + round + ".csb")] = File.ReadAllBytes(music);
+                }
             Write(game, list, stage, source, made);
         }
 

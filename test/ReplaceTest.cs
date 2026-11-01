@@ -88,18 +88,26 @@ namespace ExMoreStuff
             Check(Replacements.Restore(game, "TRN") == null && File.ReadAllText(bgm) == "a song from the Music page", "taken out, what was there back");
             File.Delete(bgm);
 
-            Console.WriteLine("A custom stage in a game stage's place with its own music (a performance test)");
+            Console.WriteLine("A custom stage in a game stage's place brings its own music (user 2026-10-30)");
             foreach (string suffix in StagePack.Suffixes)
                 File.WriteAllBytes(Path.Combine(patch, "STG_U07" + suffix), StagePack.Recode(File.ReadAllBytes(Path.Combine(resource, "STG_DET" + suffix)), "DET", "U07"));
-            string own = Path.Combine(Path.GetDirectoryName(bgm), "BGM_U07.csb"), det = Path.Combine(Path.GetDirectoryName(bgm), "BGM_DET.csb");
+            string music = Path.GetDirectoryName(bgm);
+            string own = Path.Combine(music, "BGM_U07.csb"), own3 = Path.Combine(music, "BGM_U073.csb");
+            string det = Path.Combine(music, "BGM_DET.csb"), det2 = Path.Combine(music, "BGM_DET2.csb"), det3 = Path.Combine(music, "BGM_DET3.csb");
             File.WriteAllText(own, "U07's own music");
+            File.WriteAllText(own3, "U07's round 3");
+            File.WriteAllText(det, "a song on Pit Stop 109 from the Music page");
             Replacements.Replace(game, "DET", "U07");
-            Check(!File.Exists(det), "the Stages page's replace: the stage's own music stays");
-            Replacements.Restore(game, "DET");
-            Replacements.Replace(game, "DET", "U07", true);
-            Check(File.ReadAllText(det) == "U07's own music", "with its music: BGM_U07.csb plays as BGM_DET.csb");
-            Check(Replacements.Restore(game, "DET") == null && !File.Exists(det) && File.Exists(own), "taken out after; its own stays");
+            Check(File.ReadAllText(det) == "U07's own music", "BGM_U07.csb plays as BGM_DET.csb");
+            Check(File.ReadAllText(det3) == "U07's round 3" && !File.Exists(det2), "its round 3 too; no round 2 of its own, none made");
+            Check(Replacements.Restore(game, "DET") == null && File.ReadAllText(det) == "a song on Pit Stop 109 from the Music page" && !File.Exists(det3) && File.Exists(own),
+                  "taken out after: the song that was on Pit Stop 109 back, its own stays");
+            File.Delete(det);
             File.Delete(own);
+            File.Delete(own3);
+            Replacements.Replace(game, "DET", "U07");
+            Check(!File.Exists(det), "a custom stage without music: Pit Stop 109's own music stays");
+            Replacements.Restore(game, "DET");
             foreach (string suffix in StagePack.Suffixes) File.Delete(Path.Combine(patch, "STG_U07" + suffix));
 
             Console.WriteLine("Beautiful Bay");

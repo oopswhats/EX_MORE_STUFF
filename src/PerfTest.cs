@@ -738,7 +738,7 @@ namespace ExMoreStuff
             try
             {
                 Begin(game, "TRN", null);
-                Replacements.Replace(game, "TRN", item.Code, true);   // its BGM_<code>.csb plays as Training Stage's
+                Replacements.Replace(game, "TRN", item.Code);   // its BGM_<code>.csb plays as Training Stage's
                 // the player closing the game sooner (its X, Alt+F4) leaves no result: that's fine for listening
                 try { RunGame(game, FightLines(new[] { 0, 1, StageId("TRN") }) + TrainingMode + "listen=" + ListenSeconds + "\r\n"); }
                 catch (LoadFailed ex) when (ex.Message == ClosedEarly) { }

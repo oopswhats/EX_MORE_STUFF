@@ -1058,7 +1058,7 @@ namespace ExMoreStuff
             if (custom.Count == 0) cards.Add(ShadowLabel.Note("No custom stages yet.", width));
             cards.AddRange(custom.Select(Card));
             cards.Add(new Heading("The game's stages", width));
-            cards.Add(ShadowLabel.Note("Click a stage to replace it with another one. Only you see it, online too, and its music stays the same.", width));
+            cards.Add(ShadowLabel.Note("Click a stage to replace it with another one. Only you see it, online too. A mod stage brings its own music with it.", width));
             var grid = new StageGrid(width) { Margin = new Padding(6, 0, 6, 16) };
             grid.ReplacedBy = code => { string source = Replacement(wantedReplaced, code); return source == null ? null : StageName(source); };
             grid.StageClicked += ChooseReplacement;
