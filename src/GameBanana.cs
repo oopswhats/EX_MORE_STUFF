@@ -667,6 +667,7 @@ namespace ExMoreStuff
                     try { Directory.Delete(work, true); } catch (Exception) { }
                 }
             }
+            files = ColorContainers(files);
             if (depth >= 2) return files;
             var result = new List<KeyValuePair<string, byte[]>>();
             try
@@ -685,6 +686,26 @@ namespace ExMoreStuff
             finally
             {
                 if (depth == 0 && Directory.Exists(workFolder)) try { Directory.Delete(workFolder, true); } catch (Exception) { }
+            }
+            return result;
+        }
+
+        // A color packed as one container, <CHR>_<NN>_<CC>.col.emz holding its .obj.emm and .col.emb (user 2026-11-08: Bogart
+        // Willey's CMY_01_03.col.emz.zip, "has no costume, color ... files"): its files take its place, in its folder. Only
+        // .col.emz: a stage's .emz is the game's own file and stays as it is.
+        static List<KeyValuePair<string, byte[]>> ColorContainers(List<KeyValuePair<string, byte[]>> files)
+        {
+            if (!files.Any(f => f.Key.EndsWith(".col.emz", StringComparison.OrdinalIgnoreCase))) return files;
+            var result = new List<KeyValuePair<string, byte[]>>();
+            foreach (var f in files)
+            {
+                if (!f.Key.EndsWith(".col.emz", StringComparison.OrdinalIgnoreCase)) { result.Add(f); continue; }
+                string folder = f.Key.LastIndexOf('/') < 0 ? "" : f.Key.Substring(0, f.Key.LastIndexOf('/') + 1);
+                List<KeyValuePair<string, byte[]>> inside;
+                try { inside = GameArt.ReadContainer(GameArt.Unpack(f.Value)); }
+                catch (Exception) { inside = new List<KeyValuePair<string, byte[]>>(); }   // damaged: nothing in it is used
+                result.AddRange(inside.Where(e => e.Key != "" && e.Key.IndexOfAny(new[] { '/', '\\' }) < 0 && Keep(e.Key) && !e.Key.EndsWith(".emz", StringComparison.OrdinalIgnoreCase))
+                                      .Select(e => new KeyValuePair<string, byte[]>(folder + e.Key, e.Value)));
             }
             return result;
         }

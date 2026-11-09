@@ -181,15 +181,26 @@ namespace ExMoreStuff
             catch (Exception) { return new HashSet<string>(StringComparer.Ordinal); }
         }
 
+        // costumes locked only because their fix was refused (before 1.2.2 a fixed copy couldn't go into EX More Stuff's own
+        // folder when that's inside the game's, Bogart Willey 2026-11-08): checked again, and put back in once fixed
+        static readonly HashSet<string> retried = new HashSet<string>(StringComparer.Ordinal);
+
         /// <summary>The player's own costume packages (in the game or switched off) not checked yet in this version.</summary>
         public static List<Installed> Unchecked(string game)
         {
+            foreach (var w in AllWarnings().Where(w => w.Value.Contains("that's inside the game's folder")))
+            {
+                SetWarning(w.Key, null);
+                lock (retried) retried.Add(w.Key);
+            }
             var done = Checked();
             return Installer.Load(game).Concat(Installer.Removed(game))
                 .Where(r => r.Item.IsCostume && r.Source == "file" && r.Package != null && File.Exists(r.Package) && Warning(r.Item.Key) == null)
-                .Where(r => { try { return !done.Contains(Stamp(r)); } catch (Exception) { return false; } })
+                .Where(r => { try { lock (retried) if (retried.Contains(r.Item.Key)) return true; return !done.Contains(Stamp(r)); } catch (Exception) { return false; } })
                 .GroupBy(r => r.Item.Key).Select(g => g.First()).ToList();
         }
+
+        static bool Retried(string itemKey) { lock (retried) return retried.Remove(itemKey); }
 
         static void MarkChecked(Item item, string package)
         {
@@ -224,7 +235,7 @@ namespace ExMoreStuff
                     foreach (var s in CostumeSwaps.Load(game).Where(s => s.Fighter == r.Item.Fighter && s.Source == r.Item.Slot).ToList()) CostumeSwaps.Restore(game, s.Fighter, s.Costume);
                 }
             }
-            else if (said != null && inGame) Installer.InstallPackage(game, r.Item, use, "file", use == r.Package && r.Theirs);   // its fixed files into the game
+            else if (said != null && (inGame || Retried(r.Item.Key))) Installer.InstallPackage(game, r.Item, use, "file", use == r.Package && r.Theirs);   // its fixed files into the game
             MarkChecked(r.Item, use);
             return warning;
         }

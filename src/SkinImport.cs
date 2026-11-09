@@ -178,6 +178,14 @@ namespace ExMoreStuff
                 string path = Path.Combine(game, root, "battle", "chara", fighter, name);
                 if (File.Exists(path)) return path;
             }
+            // Oni, Evil Ryu, Yang and Yun keep their Original's colors 3-10 in dlc\03_character (1-2 in 03_character_free; user
+            // 2026-11-08: Bogart Willey's GKX.7z, "the game's own GKX_01_03.col.emb isn't there"); their alternates there stay
+            // out (paid costumes never fill another)
+            if (name.StartsWith(fighter + "_01", StringComparison.OrdinalIgnoreCase))
+            {
+                string path = Path.Combine(game, "dlc", "03_character", "battle", "chara", fighter, name);
+                if (File.Exists(path)) return path;
+            }
             return null;
         }
 

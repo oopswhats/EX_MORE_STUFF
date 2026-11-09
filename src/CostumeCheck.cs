@@ -896,7 +896,9 @@ namespace ExMoreStuff
             if (string.Equals(t, s, StringComparison.OrdinalIgnoreCase) ||
                 (Directory.Exists(s) && string.Equals(Path.GetDirectoryName(t), s, StringComparison.OrdinalIgnoreCase) && source.Names.Contains(Path.GetFileName(t), StringComparer.OrdinalIgnoreCase)))
                 return "that's the costume itself, and it stays as it is. Pick another place.";
-            if (game != null && InGame(game, t)) return "that's inside the game's folder. Pick a place outside it; the copy goes into the game with Advanced > Add Mod From File.";
+            // EX More Stuff's own folder may be inside the game's (user 2026-11-08: Bogart Willey's _Mods\EX More Stuff, where every
+            // fix on install was refused and 20 fixable costumes were locked): a copy there isn't loaded by the game
+            if (game != null && InGame(game, t) && !InGame(AppFolders.Root, t)) return "that's inside the game's folder. Pick a place outside it; the copy goes into the game with Advanced > Add Mod From File.";
             return null;
         }
 
