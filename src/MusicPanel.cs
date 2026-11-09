@@ -737,7 +737,8 @@ namespace ExMoreStuff
             int ls = wave.LoopStart, le = wave.LoopEnd;
             if (!startBox.Focused) startBox.Text = Exact(ls);
             if (!endBox.Focused) endBox.Text = Exact(le);
-            lengthLabel.Text = "Intro " + WaveformView.Time((ls - wave.SongStart) / (double)Song.Rate) + "   Loop " + WaveformView.Time((le - ls) / (double)Song.Rate);
+            lengthLabel.Text = ls <= wave.SongStart ? "No intro: it loops from the start   Loop " + WaveformView.Time((le - ls) / (double)Song.Rate)
+                             : "Intro " + WaveformView.Time((ls - wave.SongStart) / (double)Song.Rate) + "   Loop " + WaveformView.Time((le - ls) / (double)Song.Rate);
             var pcm = Preview(false);
             if (song.GameLoop && ls == song.LoopStart && le == song.LoopEnd)
             {

@@ -201,7 +201,7 @@ namespace ExMoreStuff
             {
                 int g = f + d;
                 if (g <= 0 || g >= frames) continue;
-                int level = Math.Abs(pcm[g * 2]) + Math.Abs(pcm[g * 2 + 1]);
+                int level = Math.Abs((int)pcm[g * 2]) + Math.Abs((int)pcm[g * 2 + 1]);   // as int: Math.Abs(short) throws on -32768 (clipped songs)
                 bool crossing = (pcm[(g - 1) * 2] < 0) != (pcm[g * 2] < 0);
                 int score = level + (crossing || level == 0 ? 0 : 4000) + Math.Abs(d) / 4;
                 if (score < bestScore) { bestScore = score; best = g; }
@@ -237,6 +237,9 @@ namespace ExMoreStuff
                 int xa = X(songStart);
                 if (xa > 0) using (var cut = new SolidBrush(Color.FromArgb(150, 12, 13, 16))) g.FillRectangle(cut, 0, ruler, Math.Min(Width, xa), Height - ruler);
             }
+            // the two parts named (Tom 2026-11-02 missed that the green line ends an intro, on each layer)
+            DrawPart(g, X(songStart), xs, ruler, "intro (plays once)");
+            DrawPart(g, xs, xe, ruler, "loop");
             DrawMarker(g, loopStart, StartColor, "loop start");
             DrawMarker(g, loopEnd, EndColor, "loop end");
             DrawSongStart(g);
@@ -314,6 +317,15 @@ namespace ExMoreStuff
             using (var pen = new Pen(colour, 2f)) g.DrawLine(pen, x, 0, x, Height);
             using (var brush = new SolidBrush(colour)) g.FillPolygon(brush, new[] { new Point(x - 6, 0), new Point(x + 6, 0), new Point(x, 9) });
             Theme.Draw(g, label, Theme.Bold(7.5f), colour, new Rectangle(x + 5, Height - 18, 80, 16), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        }
+
+        // a part's name, centred in what shows of it just under the ruler; left out when it doesn't fit
+        void DrawPart(Graphics g, int from, int to, int ruler, string label)
+        {
+            Font font = Theme.Bold(7.5f);
+            int a = Math.Max(0, from), b = Math.Min(Width, to), w = TextRenderer.MeasureText(label, font).Width;
+            if (b - a < w + 16) return;
+            Theme.Draw(g, label, font, Theme.Muted, new Rectangle(a, ruler + 2, b - a, 16), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
         // the song's start: a white line, its handle (an upward triangle) at the bottom, its label above the loop ones

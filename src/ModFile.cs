@@ -227,7 +227,7 @@ namespace ExMoreStuff
         /// code of the player's own) and docked (Docked), not put in the game; the game may be open. A .zip that makes one
         /// package becomes that package itself (user 2026-10-14: "when i press the image button it should put the image in
         /// there", the zip they added, as their costume packages are): its files converted in place, so the picture and code
-        /// changes go into it and it's the file to upload. A mod that makes several, or a .rar or .7z (not written), gets
+        /// changes go into it and it's the file to upload. A zip of several mods isn't docked (packs aren't uploaded); a .rar or .7z (not written) gets
         /// copies in Mods\ as Install builds them. Into: what was docked ("stage U03"); Problems: what wasn't.</summary>
         public static Result Dock(string game, string path, Action<string> say, bool check = false)
         {
@@ -235,6 +235,10 @@ namespace ExMoreStuff
             Directory.CreateDirectory(patch);
             say("Unpacking " + Path.GetFileName(path) + "...");
             var files = GameBanana.Unpack(path, Path.Combine(patch, "ex_more_stuff.unpack"));
+            // one mod per docked zip: docking is for uploading, and packs aren't uploaded (user 2026-11-01: "only support that
+            // for legacy, i dont want people uploading packs"); Add Mod From File still takes them, a package each
+            int mods = SkinImport.Find(files).Count + FindStages(files).Count + FindColors(files).Select(c => c.Fighter + "_" + c.Costume).Distinct().Count();
+            if (mods > 1) throw new InvalidDataException("it has " + mods + " mods in it. Docking is for one mod you'll upload: put each mod in its own zip, or add it without docking.");
             var built = new List<string>();
             var result = InstallFiles(game, files, "file:" + Md5(path).Substring(0, 16), NameFrom(path), null, " (" + Path.GetFileName(path) + ")", null, say, dock: built.Add, check: check);
             if (built.Count == 1 && path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))

@@ -7,11 +7,11 @@ namespace ExMoreStuff
 {
     // Old .rar archives (RAR 1.5 to 4.x, "Rar!\x1a\x07\x00") read by EX More Stuff itself (user 2026-10-16: Windows 10's tar can't
     // undo the filters older RARs use, "Parsing filters is unsupported", so kenji490's Nightwolf for T.Hawk didn't install).
-    // RAR 2.9's unpacking (Huffman-coded LZ with its standard filters: E8, E8E9, delta, RGB, audio) and stored files, solid or
-    // not, each file checked against its CRC. Anything else (PPMd blocks, the RAR 1.5/2.0 methods, passwords, volumes, filters
-    // that aren't the standard ones) is NotSupportedException, and the caller tries Windows' tar instead (it reads RAR5).
+    // RAR 2.9's unpacking (Huffman-coded LZ with its standard filters: E8, E8E9, delta, RGB, audio; PPMd blocks, RarPpmd.cs)
+    // and stored files, solid or not, each file checked against its CRC. Anything else (the RAR 1.5/2.0 methods, passwords,
+    // volumes, filters that aren't the standard ones) is NotSupportedException, and the caller tries Windows' tar instead.
     // Written from the format as unrar's public source and libarchive (BSD licence) describe it; nothing in an archive is run.
-    static class Rar
+    static partial class Rar
     {
         static readonly byte[] Signature = { 0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00 };
 
@@ -255,6 +255,9 @@ namespace ExMoreStuff
 
             public void AddBits(int n) { n += Bit; Addr += n >> 3; Bit = n & 7; }
 
+            // a whole byte (PPMd reads bytes: its blocks start on one)
+            public int GetChar() { return Byte(Addr++); }
+
             // a number in RarVM's own variable-length form
             public uint ReadData()
             {
@@ -304,6 +307,9 @@ namespace ExMoreStuff
             readonly byte[] oldTable = new byte[TableSize];
             Huffman md, dd, ldd, rd;
             bool tablesRead;
+            Ppmd ppm;                     // made at the first PPMd block; its model lives on as unrar's does
+            bool ppmBlock;
+            int ppmEscChar = 2;
             readonly uint[] oldDist = new uint[4];
             uint lastDist;
             int lastLength, lowDistRepCount;
@@ -342,10 +348,13 @@ namespace ExMoreStuff
                     filters.Clear();
                     oldFilterLengths.Clear();
                     lastFilter = 0;
+                    ppmBlock = false;
+                    ppmEscChar = 2;
                 }
                 stack.Clear();
                 inp_buf = data;
                 inp = new BitInput(data, start, start + length);
+                if (ppm != null) ppm.In = inp;   // a solid file can go on in the PPMd block the one before ended in
                 inEnd = start + length;
                 output = new byte[unpSize];
                 outLength = unpSize;
@@ -359,6 +368,45 @@ namespace ExMoreStuff
                     {
                         WriteBuf();
                         if (written > outLength) break;
+                    }
+                    if (ppmBlock)   // unrar's Unpack29, BLOCK_PPM
+                    {
+                        int ch = ppm.DecodeChar();
+                        if (ch == -1) { PpmDamaged(); break; }
+                        if (ch == ppmEscChar)
+                        {
+                            int next = ppm.DecodeChar();
+                            if (next == -1) { PpmDamaged(); break; }
+                            if (next == 0) { ReadTables(); continue; }   // back to LZ
+                            if (next == 2) break;                        // this file's end
+                            if (next == 3) { if (!ReadVMCodePpm()) break; continue; }
+                            if (next == 4)   // a match: distance in 3 bytes, length in 1
+                            {
+                                uint distance = 0;
+                                int len = 0;
+                                bool failed = false;
+                                for (int i = 0; i < 4 && !failed; i++)
+                                {
+                                    int c = ppm.DecodeChar();
+                                    if (c == -1) failed = true;
+                                    else if (i == 3) len = c;
+                                    else distance = (distance << 8) + (uint)c;
+                                }
+                                if (failed) { PpmDamaged(); break; }
+                                CopyString(len + 32, distance + 2);
+                                continue;
+                            }
+                            if (next == 5)   // a run of the last byte
+                            {
+                                int len = ppm.DecodeChar();
+                                if (len == -1) { PpmDamaged(); break; }
+                                CopyString(len + 4, 1);
+                                continue;
+                            }
+                            // 1: the escape character itself
+                        }
+                        window[unpPtr++] = (byte)ch;
+                        continue;
                     }
                     int number = md.Decode(this);
                     if (number < 256) { window[unpPtr++] = (byte)number; continue; }
@@ -449,7 +497,14 @@ namespace ExMoreStuff
             {
                 inp.AddBits((8 - inp.Bit) & 7);   // to the next byte
                 uint bitField = inp.GetBits();
-                if ((bitField & 0x8000) != 0) throw new NotSupportedException("PPMd packing");
+                if ((bitField & 0x8000) != 0)   // a PPMd block
+                {
+                    ppmBlock = true;
+                    if (ppm == null) ppm = new Ppmd();
+                    if (!ppm.DecodeInit(inp, ref ppmEscChar)) throw new NotSupportedException("damaged packed data");
+                    return;
+                }
+                ppmBlock = false;
                 prevLowDist = 0;
                 lowDistRepCount = 0;
                 if ((bitField & 0x4000) == 0) Array.Clear(oldTable, 0, oldTable.Length);
@@ -527,6 +582,42 @@ namespace ExMoreStuff
                 var code = new byte[length];
                 for (int i = 0; i < length; i++) { code[i] = (byte)(inp.GetBits() >> 8); inp.AddBits(8); }
                 AddVMCode(firstByte, code);
+                return true;
+            }
+
+            // damaged PPMd data: its model goes, LZ from here (unrar's PPM.CleanUp)
+            void PpmDamaged()
+            {
+                ppm.Free();
+                ppmBlock = false;
+            }
+
+            bool ReadVMCodePpm()
+            {
+                int firstByte = ppm.DecodeChar();
+                if (firstByte == -1) { PpmDamaged(); return false; }
+                int length = (firstByte & 7) + 1;
+                if (length == 7)
+                {
+                    int b1 = ppm.DecodeChar();
+                    if (b1 == -1) { PpmDamaged(); return false; }
+                    length = b1 + 7;
+                }
+                else if (length == 8)
+                {
+                    int b1 = ppm.DecodeChar(), b2 = b1 == -1 ? -1 : ppm.DecodeChar();
+                    if (b2 == -1) { PpmDamaged(); return false; }
+                    length = b1 * 256 + b2;
+                }
+                if (length == 0) return false;
+                var code = new byte[length];
+                for (int i = 0; i < length; i++)
+                {
+                    int ch = ppm.DecodeChar();
+                    if (ch == -1) { PpmDamaged(); return false; }
+                    code[i] = (byte)ch;
+                }
+                AddVMCode((uint)firstByte, code);
                 return true;
             }
 
