@@ -98,8 +98,16 @@ namespace ExMoreStuff
         /// <summary>The creators' support links by member number, as last read with the list (or kept from before).</summary>
         public static Dictionary<long, Support> Supports { get; private set; } = new Dictionary<long, Support>();
 
-        static readonly System.Text.RegularExpressions.Regex KofiLink = new System.Text.RegularExpressions.Regex(@"^https://(www\.)?ko-fi\.com/[A-Za-z0-9_\-]+/?$"),
-                                                            PatreonLink = new System.Text.RegularExpressions.Regex(@"^https://(www\.)?patreon\.com/[A-Za-z0-9_\-]+/?$");
+        // A Ko-fi or Patreon as a profile keeps it, made https://<site>/<name>; null for anything else. Contact Info holds
+        // just the name ("tom90"; user 2026-11-18: "accept the name from the profile not the full link"), a donation
+        // method the full address, in any case ("https://Ko-fi.com/tom90"), http or https, www or not.
+        public static string SupportLink(string value, string site)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match((value ?? "").Trim(),
+                @"^(?:(?:https?://)?(?:www\.)?" + System.Text.RegularExpressions.Regex.Escape(site) + @"/(?:c/)?)?@?([A-Za-z0-9_\-]+)/?$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return m.Success ? "https://" + site + "/" + m.Groups[1].Value : null;
+        }
 
         // each creator's profile on the list, 6 at a time (one small request each): their Ko-fi and Patreon links
         static async Task<Dictionary<long, Support>> ReadSupport(List<Mod> mods)
@@ -114,9 +122,9 @@ namespace ExMoreStuff
                     var support = new Support();
                     foreach (object way in Items(Get(profile, "_aDonationMethods")).Concat(Items(Get(profile, "_aContactInfo"))))
                     {
-                        string link = Text(way, "_sValue").Trim(), icon = Text(way, "_sIconClasses");
-                        if (support.Kofi == null && icon.Contains("Kofi") && KofiLink.IsMatch(link)) support.Kofi = link;
-                        if (support.Patreon == null && icon.Contains("Patreon") && PatreonLink.IsMatch(link)) support.Patreon = link;
+                        string value = Text(way, "_sValue"), icon = Text(way, "_sIconClasses");
+                        if (support.Kofi == null && icon.Contains("Kofi")) support.Kofi = SupportLink(value, "ko-fi.com");
+                        if (support.Patreon == null && icon.Contains("Patreon")) support.Patreon = SupportLink(value, "patreon.com");
                     }
                     return new KeyValuePair<long, Support>(id, support);
                 }
@@ -329,8 +337,8 @@ namespace ExMoreStuff
             if (data.ContainsKey("support") && data["support"] is ArrayList)
                 Supports = ((ArrayList)data["support"]).Cast<Dictionary<string, object>>().Select(x => new KeyValuePair<long, Support>(n(x["member"]), new Support
                 {
-                    Kofi = x["kofi"] is string && KofiLink.IsMatch((string)x["kofi"]) ? (string)x["kofi"] : null,
-                    Patreon = x["patreon"] is string && PatreonLink.IsMatch((string)x["patreon"]) ? (string)x["patreon"] : null,
+                    Kofi = SupportLink(x["kofi"] as string, "ko-fi.com"),
+                    Patreon = SupportLink(x["patreon"] as string, "patreon.com"),
                 })).Where(p => p.Value.Kofi != null || p.Value.Patreon != null).GroupBy(p => p.Key).ToDictionary(g => g.Key, g => g.First().Value);
             return ((ArrayList)data["mods"]).Cast<Dictionary<string, object>>().Select(m => new Mod
             {
@@ -364,8 +372,9 @@ namespace ExMoreStuff
                 {
                     // newest first: GameBanana's servers keep the oldest-first list for up to 10 minutes (Cache-Control max-age=600,
                     // Cloudflare HIT), so a mod just uploaded wasn't on it (user 2026-10-14: Refresh didn't bring up Mishima Estate
-                    // Rooftop, uploaded a minute before); the newest-first list isn't cached (BYPASS)
-                    object j = Json(await http.GetStringAsync(Api + section + "/Index?_nPage=" + page + "&_nPerpage=50&_aFilters%5BGeneric_Game%5D=" + Game + "&_sSort=Generic_Newest"));
+                    // Rooftop, uploaded a minute before); the newest-first list wasn't cached then (BYPASS), but is now (user
+                    // 2026-11-12: Ken X Lars missing after 10 Refreshes, Cloudflare HIT, Age 340): it carries the fresh marker too
+                    object j = Json(await http.GetStringAsync(Api + section + "/Index?_nPage=" + page + "&_nPerpage=50&_aFilters%5BGeneric_Game%5D=" + Game + "&_sSort=Generic_Newest&" + Fresh));
                     foreach (object r in Items(Get(j, "_aRecords")))
                     {
                         string small, large;
@@ -479,6 +488,30 @@ namespace ExMoreStuff
         }
 
         public static Task<byte[]> Bytes(string url) { return http.GetByteArrayAsync(url); }
+
+        // every picture on a mod's GameBanana page, full size, in the page's order (one small request when its picture view
+        // opens; user 2026-11-18: "next / previous ... pull them from the page when you click them"); kept until the next
+        // Refresh; null when the page can't be read
+        static readonly Dictionary<string, Task<List<string>>> pictureLists = new Dictionary<string, Task<List<string>>>();
+
+        public static Task<List<string>> PictureList(Mod mod)
+        {
+            string key = mod.Id + "&" + Fresh;
+            Task<List<string>> list;
+            if (!pictureLists.TryGetValue(key, out list) || list.IsFaulted || (list.IsCompleted && list.Result == null)) pictureLists[key] = list = ReadPictureList(mod);
+            return list;
+        }
+
+        static async Task<List<string>> ReadPictureList(Mod mod)
+        {
+            try
+            {
+                object j = Json(await http.GetStringAsync(Api + mod.ItemType + "/" + mod.ItemId + "?_csvProperties=_aPreviewMedia&" + Fresh));
+                return Items(Get(Get(j, "_aPreviewMedia"), "_aImages")).Where(i => Text(i, "_sFile") != "")
+                       .Select(i => Text(i, "_sBaseUrl") + "/" + Text(i, "_sFile")).Distinct().ToList();
+            }
+            catch (Exception) { return null; }
+        }
 
         /// <summary>The picture inside a zip on GameBanana, read without downloading the zip (user 2026-10-17: GameBanana's
         /// Sounds section takes no picture, so a song mod's card shows the .png or .jpg in its zip): its end, where the zip

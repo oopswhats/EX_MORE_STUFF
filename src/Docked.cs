@@ -90,13 +90,16 @@ namespace ExMoreStuff
         // a click shows one full size (ShotClicked, its number)
         public readonly ShotThumb[] Thumbs = { new ShotThumb(), new ShotThumb(), new ShotThumb() };
         public event Action<int> ShotClicked;
+        // right of the pictures: copies of them full size beside the zip (user 2026-11-18: "so i can use the images on gamebanana")
+        public readonly FlatButton SavePictures = new FlatButton("Save pictures") { Visible = false };   // (where: its tooltip; a longer name didn't fit at 1000 wide)
         // taller (user 2026-10-21: "you can make the dock thing bigger vertically"): its name, kind and file across the top,
         // its buttons in a row along the bottom
         public const int RowHeight = 140, ShotsHeight = 112, ThumbWidth = 176, ThumbHeight = 99;
 
         public DockedRow()
         {
-            Controls.AddRange(new Control[] { Code, Change, Remove, ColorPictures, Preview, UnusedCode, ShowFile });
+            Controls.AddRange(new Control[] { Code, Change, Remove, ColorPictures, Preview, UnusedCode, ShowFile, SavePictures });
+            SavePictures.Width = TextRenderer.MeasureText(SavePictures.Text, SavePictures.Font).Width + 36;
             for (int i = 0; i < Thumbs.Length; i++)
             {
                 int n = i;
@@ -128,6 +131,7 @@ namespace ExMoreStuff
                 Thumbs[i].Picture = i < shots.Count ? shots[i] : null;
                 Thumbs[i].Visible = Thumbs[i].Picture != null;
             }
+            SavePictures.Visible = shots.Count > 0;
             Arrange();
         }
 
@@ -149,6 +153,7 @@ namespace ExMoreStuff
             }
             ShowFile.Bounds = new Rectangle(160, 64, Math.Max(40, TextRight - 160), 18);
             for (int i = 0; i < Thumbs.Length; i++) Thumbs[i].Bounds = new Rectangle(160 + i * (ThumbWidth + 10), h - 2, ThumbWidth, ThumbHeight);
+            SavePictures.Location = new Point(160 + Thumbs.Length * (ThumbWidth + 10) + 6, h - 2 + (ThumbHeight - SavePictures.Height) / 2);
             Invalidate();
         }
 

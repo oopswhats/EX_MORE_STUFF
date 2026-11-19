@@ -46,6 +46,7 @@ namespace ExMoreStuff
             if (faults.Any(f => f.Kind == "BROKEN")) yield return "Its model is damaged and might crash the game.";
             else if (faults.Any(f => f.Kind == "PALETTE" || f.Kind == "SUBMESHES")) yield return "Its model is built in a way the game can't take and might crash the game.";
             if (faults.Any(f => f.Kind == "FILES")) yield return "It's missing files the game loads with every costume. Fixing takes them from " + fighter + "'s first costume.";
+            if (faults.Any(f => f.Kind == "PHYSICS")) yield return "Some of its swinging parts (cloth, hair) are set up wrong, which crashes the game in a match. Fixing takes the broken ones out; the rest still swing.";
             if (faults.Any(f => f.Kind == "EMM>CAP")) yield return "Some of its colors have more materials than its model takes, so they show without textures.";
             // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
             if (faults.Any(f => f.Kind == "COLORS")) yield return "It doesn't have all ten colors, so rollback games won't offer it.";
@@ -67,6 +68,7 @@ namespace ExMoreStuff
                 var faults = Faults(r);
                 if (faults.Any(f => f.Kind == "DESYNC" || f.Kind == "DESYNC?")) said.Add("its bones put back where " + Fighter(r) + "'s are");
                 if (faults.Any(f => f.Kind == "FILES")) said.Add("its missing files taken from " + Fighter(r) + "'s first costume");
+                if (faults.Any(f => f.Kind == "PHYSICS")) said.Add("its broken swinging parts taken out");
             }
             return "fixed: " + string.Join("; ", said.Distinct());
         }
@@ -168,12 +170,16 @@ namespace ExMoreStuff
 
         static string CheckedFile { get { return AppFolders.DataFile("costume_checked.txt"); } }
 
-        // a package as checked: its key, size and time, so a new version of it is checked again
+        // a package as checked: its key, size and time, so a new version of it is checked again; with the check's revision
+        // in front when the check learned something (Revision), so every costume is checked once more with it
         static string Stamp(Installed r)
         {
             var f = new FileInfo(r.Package);
-            return r.Item.Key + "|" + f.Length + "|" + f.LastWriteTimeUtc.Ticks;
+            return Revision + r.Item.Key + "|" + f.Length + "|" + f.LastWriteTimeUtc.Ticks;
         }
+
+        // 1.2.3: PHYSICS (broken .bsr groups, Tom's Dictator Nightmare 2026-11-12); costumes checked before it are checked again
+        const string Revision = "physics|";
 
         static HashSet<string> Checked()
         {

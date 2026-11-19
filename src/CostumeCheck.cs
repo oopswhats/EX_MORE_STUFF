@@ -63,7 +63,7 @@ namespace ExMoreStuff
         }
 
         // what puts a costume under "Need a fix"
-        public static readonly string[] Faults = { "FILES", "EMM>CAP", "COLORS", "SLOT", "BROKEN", "PALETTE", "SUBMESHES", "UNREAD" };
+        public static readonly string[] Faults = { "FILES", "EMM>CAP", "COLORS", "SLOT", "BROKEN", "PALETTE", "SUBMESHES", "PHYSICS", "UNREAD" };
 
         // ---- reading the files ----
 
@@ -648,6 +648,13 @@ namespace ExMoreStuff
             if (fighter == "BLR") parts.AddRange(new[] { ".clw.emo", ".msk.emo" });
             var lost = parts.Where(p => !source.Names.Contains(stem + p, StringComparer.OrdinalIgnoreCase)).ToList();
             if (lost.Count > 0) add("FILES", "missing " + string.Join(" ", lost.Select(p => stem + p)) + " (the game loads them for every costume)", true);
+            if (source.Names.Contains(stem + ".bsr", StringComparer.OrdinalIgnoreCase))
+            {
+                List<string> physics;
+                try { physics = PhysicsProblems(Unwrap(source.Read(stem + ".bsr"))).Select(p => p.Item2).ToList(); }
+                catch (Exception ex) { physics = new List<string> { "it couldn't be read (" + ex.Message + ")" }; }
+                if (physics.Count > 0) add("PHYSICS", stem + ".bsr: " + string.Join("; ", physics.Take(4)) + (physics.Count > 4 ? "; " + (physics.Count - 4) + " more" : ""), true);
+            }
             int capacity = shape.Broken == null ? MaterialCapacity(emo) : 0;
             var used = shape.Broken == null ? UsedMaterials(emo) : new List<string>();
             var absent = new List<string>();
@@ -672,6 +679,55 @@ namespace ExMoreStuff
             foreach (var w in white) add("WHITE", "colors " + string.Join(" ", w.Value) + ": the .obj.emm lacks " + w.Key + " (drawn white)", true);
             // ROLLBACK-NAME
             if (absent.Count > 0) add("COLORS", "missing colors " + string.Join(" ", absent) + ": rollback games only offer a costume with all ten colors", false);
+        }
+
+        // ---- physics (.bsr) ----
+
+        // A .bsr's broken groups (the add-on's _bsr_problems, 1.68.9; the USF4 costume agent's rule): (group, why) for each.
+        // Header: '#BSR', (count, offset) x 3 at 12: groups (a table of u32 offsets), bone names, collider bone names. A group:
+        // f32 gravity, f32 value, 8 bytes, then (count, offset from the group) x 4 at +16: chains (12 bytes: u32 anchor),
+        // nodes (36: u32 bone name index), links (28: u8 type, u8, u8 node a, u8 node b), colliders (40: u8 shape, u8, u8
+        // bone a, u8 bone b). Links and chain anchors number nodes by their bone name index (Capcom's DDL_04 groups 5-6
+        // repeat groups 2-3). A group with no nodes or no chains, or reaching nodes not its own, is broken. All 1822 groups
+        // of Capcom's 289 .bsr files pass. Tom's Dictator Nightmare (VEG_11, 2026-11-12) closed the game offline: two
+        // groups with no nodes and 2 links on another group's nodes (the old SFxT converter); without them it runs (Tom,
+        // 2026-11-13).
+        internal static List<Tuple<int, string>> PhysicsProblems(byte[] b)
+        {
+            var found = new List<Tuple<int, string>>();
+            if (b == null || b.Length < 36 || Encoding.ASCII.GetString(b, 0, 4) != "#BSR") { found.Add(Tuple.Create(-1, "it isn't a physics file")); return found; }
+            int groups = I32(b, 12), table = I32(b, 16), names = I32(b, 20), colliders = I32(b, 28);
+            for (int gi = 0; gi < groups; gi++)
+            {
+                Action<string> say = text => found.Add(Tuple.Create(gi, "group " + gi + " " + text));
+                int g = I32(b, table + 4 * gi);
+                Func<int, int> count = k => I32(b, g + 16 + 8 * k);
+                Func<int, int, int, int> at = (k, size, i) => g + I32(b, g + 20 + 8 * k) + size * i;
+                var own = new HashSet<int>(Enumerable.Range(0, count(1)).Select(i => I32(b, at(1, 36, i))));
+                if (count(1) == 0) { say("has no bones (" + count(2) + " links, " + count(0) + " strands)"); continue; }
+                if (count(0) == 0) say("has no strands (" + count(1) + " bones)");
+                if (own.Any(n => n < 0 || n >= names)) say("has bones past the file's " + names + " bone names");
+                if (Enumerable.Range(0, count(0)).Any(i => !own.Contains(I32(b, at(0, 12, i))))) say("starts strands on bones not its own");
+                if (Enumerable.Range(0, count(2)).Any(i => !own.Contains(b[at(2, 28, i) + 2]) || !own.Contains(b[at(2, 28, i) + 3]))) say("links bones not its own");
+                if (Enumerable.Range(0, count(3)).Any(i => { int c = at(3, 40, i); return b[c + 2] >= colliders || (b[c] == 1 && b[c + 3] >= colliders && b[c + 3] != 255); }))
+                    say("has colliders on bones past the file's " + colliders + " collider bones");
+            }
+            return found;
+        }
+
+        /// <summary>A .bsr without its broken groups (PhysicsProblems): their entries taken out of the group table, the
+        /// count lowered (their records stay unused in the file); null when none is broken.</summary>
+        internal static byte[] WithoutBrokenGroups(byte[] b)
+        {
+            var broken = new HashSet<int>(PhysicsProblems(b).Select(p => p.Item1));
+            if (broken.Count == 0) return null;
+            if (broken.Contains(-1)) throw new InvalidDataException("its .bsr isn't a physics file");
+            byte[] copy = (byte[])b.Clone();
+            int groups = I32(b, 12), table = I32(b, 16);
+            var keep = Enumerable.Range(0, groups).Where(g => !broken.Contains(g)).Select(g => I32(b, table + 4 * g)).ToList();
+            for (int i = 0; i < groups; i++) Array.Copy(BitConverter.GetBytes(i < keep.Count ? keep[i] : 0), 0, copy, table + 4 * i, 4);
+            Array.Copy(BitConverter.GetBytes(keep.Count), 0, copy, 12, 4);
+            return copy;
         }
 
         // ---- fixing ----
@@ -934,6 +990,14 @@ namespace ExMoreStuff
                 }
                 string materials = FixMaterials(game, fighter, stem, files);
                 if (materials != null) done.Add(stem + ": " + materials);
+                byte[] bsr;
+                if (files.TryGetValue(stem + ".bsr", out bsr))
+                {
+                    bsr = Unwrap(bsr);
+                    int before = PhysicsProblems(bsr).Select(p => p.Item1).Distinct().Count();
+                    byte[] sound = WithoutBrokenGroups(bsr);
+                    if (sound != null) { files[stem + ".bsr"] = sound; done.Add(stem + ".bsr: " + before + " broken physics groups taken out"); }
+                }
                 foreach (string part in fighter == "BLR" ? new[] { ".shd.emo", ".nml.emb", ".bsr", ".clw.emo", ".msk.emo" } : new[] { ".shd.emo", ".nml.emb", ".bsr" })
                 {
                     if (files.ContainsKey(stem + part)) continue;
@@ -985,7 +1049,8 @@ namespace ExMoreStuff
             t.AppendLine("noise below. WHITE: a material the model uses is missing from a color (several long-loved skins have it). EMM>CAP:");
             t.AppendLine("a color has more materials than the model takes. FILES / COLORS / SLOT: files or colors the game or rollback games");   // ROLLBACK-NAME
             t.AppendLine("need are missing, or the slot isn't 08-99. BROKEN: a part of the model points past the end of its file. PALETTE:");
-            t.AppendLine("more than 24 bones in one skin palette. SUBMESHES: more than 31 in one part. BROKEN, PALETTE and SUBMESHES close");
+            t.AppendLine("more than 24 bones in one skin palette. SUBMESHES: more than 31 in one part. PHYSICS: a .bsr group with no bones");
+            t.AppendLine("or strands, or reaching bones not its own (fixed by taking it out). BROKEN, PALETTE, SUBMESHES and PHYSICS close");
             t.AppendLine("the game. UNREAD: the files couldn't be read, so the costume wasn't checked.");
             return t.ToString();
         }

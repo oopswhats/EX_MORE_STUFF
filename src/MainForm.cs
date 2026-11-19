@@ -255,6 +255,24 @@ namespace ExMoreStuff
             Theme.DarkTitleBar(Handle);
         }
 
+        // Page Up / Page Down glide the list in view (the one under the pointer, else the page's main one; user 2026-11-19:
+        // "make the page up and down buttons smoothly scroll"), unless typing in a box of several lines
+        protected override bool ProcessCmdKey(ref Message msg, Keys keys)
+        {
+            if (keys == Keys.PageUp || keys == Keys.PageDown)
+            {
+                Control focused = this;
+                while (focused is ContainerControl && ((ContainerControl)focused).ActiveControl != null) focused = ((ContainerControl)focused).ActiveControl;
+                var box = focused as TextBoxBase;
+                if (box == null || !box.Multiline)
+                {
+                    var list = ScrollList.Showing(this);
+                    if (list != null) { list.Page(keys == Keys.PageDown ? 1 : -1); return true; }
+                }
+            }
+            return base.ProcessCmdKey(ref msg, keys);
+        }
+
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             if (backdrop == null || backdrop.Size != ClientSize)
@@ -263,7 +281,11 @@ namespace ExMoreStuff
                 if (musicBackdrop != null) { musicBackdrop.Dispose(); musicBackdrop = null; }
                 backdrop = Theme.Backdrop(art, ClientSize, header.Height, ClientSize.Height - footer.Height);
             }
-            e.Graphics.DrawImageUnscaled(musicTab.Selected ? MusicBackdrop() : backdrop, 0, 0);
+            // only the piece being painted: each control the art shows through paints it again under itself (a scroll of
+            // Browse Mods: every card, every step)
+            RectangleF clip = e.Graphics.ClipBounds;
+            Theme.DrawPart(e.Graphics, musicTab.Selected ? MusicBackdrop() : backdrop, Rectangle.FromLTRB((int)Math.Floor(clip.Left), (int)Math.Floor(clip.Top),
+                                                                                                      (int)Math.Ceiling(clip.Right), (int)Math.Ceiling(clip.Bottom)));
         }
 
         // the Music tab's background: the art tinted blue between the header and the footer (user 2026-10-16)
@@ -1069,6 +1091,8 @@ namespace ExMoreStuff
         // Advanced: a heading, a word on what it's for, a card per tool (built like the other pages, once the window is up).
         void BuildAdvanced()
         {
+            // the Music tab lists docked stages too (user 2026-11-18): read again when next shown, a file docked or removed
+            if (game != null) musicTabPage.SetGame(game);
             int width = ClientSize.Width - content.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth - 16;
             var music = new ToolCard
             {
@@ -1180,8 +1204,16 @@ namespace ExMoreStuff
         }
 
         // Cards (and Advanced's tool cards) flow left to right; a heading, a note or the stage grid has a line to itself.
+        // The old ones are freed (user 2026-11-18: a crash at 10,000 window handles, Windows' most for a program: every reload
+        // of these pages left its cards' windows behind), just after: a card's own click may be what reloads the page.
         static void Fill(FlowLayoutPanel list, List<Control> cards)
         {
+            var old = list.Controls.Cast<Control>().Where(c => !cards.Contains(c)).ToList();
+            if (old.Count > 0)
+            {
+                Action free = () => { foreach (Control c in old) c.Dispose(); };
+                if (list.IsHandleCreated) list.BeginInvoke(free); else free();
+            }
             list.SuspendLayout();
             list.Controls.Clear();
             foreach (Control card in cards) list.Controls.Add(card);
@@ -2338,6 +2370,20 @@ namespace ExMoreStuff
                 return true;
             };
             row.ShotClicked += i => { using (var viewer = new ShotViewer(row.Title, shots, i, PerfTest.StagePictureShot(file.Package), setPicture)) viewer.ShowDialog(this); };
+            // copies of the preview's pictures, full size, beside the zip (user 2026-11-18: for its GameBanana page):
+            // "<zip name> - preview 1.png" (left), 2 (middle), 3 (right), saved again over the last ones
+            tips.SetToolTip(row.SavePictures, "Puts these pictures, full size, in the zip's folder, ready for its GameBanana page");
+            row.SavePictures.Click += (s, e) =>
+            {
+                var made = PerfTest.PreviewPictures(file.Package);
+                string folder = Path.GetDirectoryName(file.Package), name = Path.GetFileNameWithoutExtension(file.Package);
+                try
+                {
+                    for (int i = 0; i < made.Count; i++) File.Copy(made[i], Path.Combine(folder, name + " - preview " + (i + 1) + ".png"), true);
+                    UpdateStatus("Saved " + made.Count + (made.Count == 1 ? " picture" : " pictures") + " next to " + Path.GetFileName(file.Package));
+                }
+                catch (Exception ex) { MessageBox.Show(this, "The pictures weren't saved: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            };
             if (shots.Count > 0)
                 Task.Run(() => shots.Select(p =>
                 {

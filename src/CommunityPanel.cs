@@ -116,6 +116,7 @@ namespace ExMoreStuff
         {
             previewEnded.Tick += (s, e) => { if (previewPlayer.Playing) return; previewEnded.Stop(); previewPlaying = null; ShowPreviewButtons(); };
             Controls.Add(list);
+            list.Scrolled += (s, e) => More();   // the next cards as the end comes near
             AllowDrop = true;
             foreach (Control target in new Control[] { this, list })
             {
@@ -618,58 +619,9 @@ namespace ExMoreStuff
             ModCard pointed = null;
             foreach (var entry in shown.Take(shownCount))
             {
-                InGame inGame;
-                installed.TryGetValue(entry.Key, out inGame);
-                bool current = inGame != null && !outdated.Contains(entry.Key);
-                // a skin that changes its fighter's moves too: not installed, and the card says why (user 2026-10-13)
-                string moves = inGame == null && !SkinImport.AllowMoveMods ? SkinImport.ChangesMoves(Wanted(entry.Mod).SelectMany(f => f.Contents)) : null;
-                // pulled for now (the catalog's list, user 2026-10-22): not installed, and the card says why
-                string pulledWhy = inGame == null ? Catalog.PulledWhy(entry.Mod.Id) : null;
-                if (pulledWhy != null) moves = "";
-                // a new file GameBanana is still checking (user 2026-10-13: an update showed greyed out): the card says so
-                bool checking = moves == null && entry.Mod.Files.Any(f => f.Waiting);
-                var card = new ModCard(entry.Mod.Name, entry.Mod.Author, entry.Mod.Page, entry.Mod.Downloads.ToString("N0") + (entry.Mod.Downloads == 1 ? " download" : " downloads"),
-                                       moves != null ? null : Where(entry.Mod), inGame != null ? string.Join(", ", inGame.Into) : null, inGame != null && !current)
-                           { Margin = new Padding(6), Why = pulledWhy != null ? "Switched off for now" : moves != null ? "Compatibility issue" : checking ? (inGame != null ? string.Join(", ", inGame.Into) + "   ·   " : "") +
-                                                                                                                  "GameBanana is checking a new file" : null,
-                             WhyDetail = pulledWhy != null ? char.ToUpperInvariant(pulledWhy[0]) + pulledWhy.Substring(1) + "."
-                                       : moves != null ? char.ToUpperInvariant(moves[0]) + moves.Substring(1) + " in every costume of that fighter, and online that's a desync. " +
-                                                         "Its model may need them, so as a costume it would crash."
-                                       : checking ? "GameBanana checks every new file for viruses before EX More Stuff offers it.\nIt usually takes a few minutes: press Refresh then." : null };
-                var mod = entry.Mod;
-                card.ShowSection(IsEffects(mod) ? "effects" : mod.Category);   // its GameBanana section's icon, top right (effects: their own, user 2026-10-18)
-                card.FileSize = StoragePanel.Megabytes(Wanted(mod).Sum(f => f.Size));   // what it downloads (user 2026-10-16)
-                GameBanana.Support support;
-                if (GameBanana.Supports.TryGetValue(mod.AuthorId, out support)) card.ShowSupport(support, mod.Author, tips);   // their Ko-fi / Patreon
-                card.Install.Click += async (s, e) => await Install(mod);
-                if (card.Uninstall != null)
-                {
-                    string key = entry.Key;
-                    card.Uninstall.Click += async (s, e) => { if (!working && UninstallMod != null && await UninstallMod(key, mod.Name)) Fill(); };
-                }
-                card.Creator = Creators.Key(mod);
-                card.Heart.On = Creators.IsFavorite(mod);
-                card.Heart.Click += (s, e) => ToggleFavorite(mod, card.Heart);
-                card.AuthorClicked += (s, e) => { quiet = true; search.Text = ""; quiet = false; pick = "creator:" + Creators.Key(mod); Refilter(); list.AutoScrollPosition = Point.Empty; };
-                tips.SetToolTip(card.Page, "Open its page on GameBanana");
-                card.Enable(!working);
-                if (checking && inGame == null) card.NotReady();
-                if (inGame != null)
-                {
-                    var warnings = inGame.Records.Select(r => Weight.InGame(game, r.Item, Weight.Name(r))).Where(w => w != null).ToList();
-                    if (warnings.Count > 0) card.Warning.SetMessage(string.Join("\n", warnings));
-                }
+                var card = MakeCard(entry, installed);
                 cards.Add(card);
                 if (entry.Key == pointKey) pointed = card;
-                var ignored = Thumbnail(CardPicture(entry.Mod), card);
-                // a sound's audio preview: the card's ▶ (user 2026-10-17: "update EXMS to play the preview file")
-                if (!string.IsNullOrEmpty(mod.Preview))
-                {
-                    card.PreviewUrl = mod.Preview;
-                    card.ShowListen(mod.Preview == previewPlaying);
-                    card.Listen.Click += async (s, e) => await PlayPreview(mod.Preview);
-                    tips.SetToolTip(card.Listen, "Hear its preview");
-                }
             }
             if (pick == "packs") cards.AddRange(PackCards(installed));   // the Mod Packs page: a card each
             else if (shown.Count == 0 && (loaded || entries.Count > 0) && pick == "notifications" && search.Text.Trim() == "")
@@ -678,12 +630,6 @@ namespace ExMoreStuff
                 cards.Add(ShadowLabel.Note(pick == null ? "Everything here is installed." : "All the mods for " + Picked() + " are installed.", width));
             else if (shown.Count == 0 && (loaded || entries.Count > 0))
                 cards.Add(ShadowLabel.Note(search.Text.Trim() != "" ? "No mods match \"" + search.Text.Trim() + "\"" + (pick != null ? " in " + Picked() : "") + "." : "No mods for " + Picked() + " yet.", width));
-            if (shown.Count > shownCount)
-            {
-                var more = new FlatButton("Show more (" + (shown.Count - shownCount) + " more)") { Margin = new Padding(8, 10, 8, 16) };
-                more.Click += (s, e) => { shownCount += PageSize; Fill(); };
-                cards.Add(more);
-            }
             list.SuspendLayout();
             // the cards go; the top stays where it is (so a search box being typed in keeps its place)
             foreach (Control c in list.Controls.Cast<Control>().Where(c => Array.IndexOf(top, c) < 0).ToList()) { list.Controls.Remove(c); c.Dispose(); }
@@ -696,7 +642,8 @@ namespace ExMoreStuff
             foreach (Control c in cards)
             {
                 list.Controls.Add(c);
-                if (!(c is ModCard)) { list.SetFlowBreak(c, true); int i = list.Controls.GetChildIndex(c); if (i > 0) list.SetFlowBreak(list.Controls[i - 1], true); }
+                // pack cards sit in rows as mod cards do (user 2026-11-17: "3 per row like the other cards")
+                if (!(c is ModCard) && !(c is PackCard)) { list.SetFlowBreak(c, true); int i = list.Controls.GetChildIndex(c); if (i > 0) list.SetFlowBreak(list.Controls[i - 1], true); }
             }
             list.ResumeLayout();
             if (pointed != null)
@@ -715,6 +662,90 @@ namespace ExMoreStuff
             long settles = entries.SelectMany(e => e.Mod.Files).Where(f => f.Clean && f.SettlesIn > 0).Select(f => f.SettlesIn).DefaultIfEmpty(0).Min();
             settled.Stop();
             if (settles > 0) { settled.Interval = (int)Math.Min(int.MaxValue, settles * 1000 + 1000); settled.Start(); }
+        }
+
+        // a mod's card, wired up (Fill, and More as the list is scrolled down)
+        ModCard MakeCard(Entry entry, Dictionary<string, InGame> installed)
+        {
+            InGame inGame;
+            installed.TryGetValue(entry.Key, out inGame);
+            bool current = inGame != null && !outdated.Contains(entry.Key);
+            // a skin that changes its fighter's moves too: not installed, and the card says why (user 2026-10-13)
+            string moves = inGame == null && !SkinImport.AllowMoveMods ? SkinImport.ChangesMoves(Wanted(entry.Mod).SelectMany(f => f.Contents)) : null;
+            // pulled for now (the catalog's list, user 2026-10-22): not installed, and the card says why
+            string pulledWhy = inGame == null ? Catalog.PulledWhy(entry.Mod.Id) : null;
+            if (pulledWhy != null) moves = "";
+            // a new file GameBanana is still checking (user 2026-10-13: an update showed greyed out): the card says so
+            bool checking = moves == null && entry.Mod.Files.Any(f => f.Waiting);
+            var card = new ModCard(entry.Mod.Name, entry.Mod.Author, entry.Mod.Page, entry.Mod.Downloads.ToString("N0") + (entry.Mod.Downloads == 1 ? " download" : " downloads"),
+                                   moves != null ? null : Where(entry.Mod), inGame != null ? string.Join(", ", inGame.Into) : null, inGame != null && !current)
+                       { Margin = new Padding(6), Why = pulledWhy != null ? "Switched off for now" : moves != null ? "Compatibility issue" : checking ? (inGame != null ? string.Join(", ", inGame.Into) + "   ·   " : "") +
+                                                                                                              "GameBanana is checking a new file" : null,
+                         WhyDetail = pulledWhy != null ? char.ToUpperInvariant(pulledWhy[0]) + pulledWhy.Substring(1) + "."
+                                   : moves != null ? char.ToUpperInvariant(moves[0]) + moves.Substring(1) + " in every costume of that fighter, and online that's a desync. " +
+                                                     "Its model may need them, so as a costume it would crash."
+                                   : checking ? "GameBanana checks every new file for viruses before EX More Stuff offers it.\nIt usually takes a few minutes: press Refresh then." : null };
+            var mod = entry.Mod;
+            card.ShowSection(IsEffects(mod) ? "effects" : mod.Category);   // its GameBanana section's icon, top right (effects: their own, user 2026-10-18)
+            card.FileSize = StoragePanel.Megabytes(Wanted(mod).Sum(f => f.Size));   // what it downloads (user 2026-10-16)
+            GameBanana.Support support;
+            if (GameBanana.Supports.TryGetValue(mod.AuthorId, out support)) card.ShowSupport(support, mod.Author, tips);   // their Ko-fi / Patreon
+            card.Install.Click += async (s, e) => await Install(mod);
+            if (card.Uninstall != null)
+            {
+                string key = entry.Key;
+                card.Uninstall.Click += async (s, e) => { if (!working && UninstallMod != null && await UninstallMod(key, mod.Name)) Fill(); };
+            }
+            card.Creator = Creators.Key(mod);
+            card.Heart.On = Creators.IsFavorite(mod);
+            card.Heart.Click += (s, e) => ToggleFavorite(mod, card.Heart);
+            card.AuthorClicked += (s, e) => { quiet = true; search.Text = ""; quiet = false; pick = "creator:" + Creators.Key(mod); Refilter(); list.AutoScrollPosition = Point.Empty; };
+            tips.SetToolTip(card.Page, "Open its page on GameBanana");
+            card.Enable(!working);
+            if (checking && inGame == null) card.NotReady();
+            if (inGame != null)
+            {
+                var warnings = inGame.Records.Select(r => Weight.InGame(game, r.Item, Weight.Name(r))).Where(w => w != null).ToList();
+                if (warnings.Count > 0) card.Warning.SetMessage(string.Join("\n", warnings));
+            }
+            var ignored = Thumbnail(CardPicture(entry.Mod), card);
+            var shownMod = entry.Mod;
+            card.PictureClicked += (s, e) => ShowFullPicture(shownMod);
+            // a sound's audio preview: the card's ▶ (user 2026-10-17: "update EXMS to play the preview file")
+            if (!string.IsNullOrEmpty(mod.Preview))
+            {
+                card.PreviewUrl = mod.Preview;
+                card.ShowListen(mod.Preview == previewPlaying);
+                card.Listen.Click += async (s, e) => await PlayPreview(mod.Preview);
+                tips.SetToolTip(card.Listen, "Hear its preview");
+            }
+            return card;
+        }
+
+        // Scrolled near the end: the next 9 cards added under the others (user 2026-11-17: "it should just load 9 more when
+        // i go further down", in place of the Show more button); added, not made again, so nothing jumps
+        const int MoreSize = 9;
+        bool adding;
+
+        void More()
+        {
+            if (adding || list.IsDisposed || pick == "packs" || !list.VerticalScroll.Visible) return;
+            if (list.VerticalScroll.Maximum - list.VerticalScroll.LargeChange + 1 - -list.AutoScrollPosition.Y > list.ClientSize.Height) return;   // more than a screen left
+            var shown = Shown();
+            int now = list.Controls.OfType<ModCard>().Count();
+            if (now != Math.Min(shownCount, shown.Count) || now >= shown.Count) return;   // the list isn't Fill's as it stands, or all are in
+            adding = true;
+            try
+            {
+                var installed = Recount();
+                int y = -list.AutoScrollPosition.Y;
+                list.SuspendLayout();
+                foreach (var entry in shown.Skip(now).Take(MoreSize)) list.Controls.Add(MakeCard(entry, installed));
+                shownCount = now + Math.Min(MoreSize, shown.Count - now);
+                list.ResumeLayout();
+                list.AutoScrollPosition = new Point(0, y);
+            }
+            finally { adding = false; }
         }
 
         readonly Timer settled = new Timer();
@@ -739,6 +770,37 @@ namespace ExMoreStuff
             if (bytes == null) return null;
             try { return await Task.Run(() => Pictures.Smaller(Pictures.Read(bytes), CardPictureSide)); }   // kept at card size
             catch (Exception) { return null; }   // not a picture EX More Stuff can read
+        }
+
+        // A mod's picture full size over the list (user 2026-11-17: "a full size image of the card image, not a blown up
+        // thumbnail. clicking again resets the view"): GameBanana's own picture (not the card's 220-pixel one), or the one
+        // in a song's zip; a click on it or Esc closes it, the list as it was under it.
+        FullPicture full;
+
+        async void ShowFullPicture(GameBanana.Mod mod)
+        {
+            string url = !string.IsNullOrEmpty(mod.Picture) ? mod.Picture : CardPicture(mod);
+            if (string.IsNullOrEmpty(url)) return;
+            if (full != null) full.Close();
+            var view = full = new FullPicture(mod.Name, url, FullSize);
+            view.Closed += (s, e) => { if (full == view) full = null; };
+            Controls.Add(view);
+            view.BringToFront();
+            view.Focus();
+            // the rest of its pictures, from its GameBanana page (user 2026-11-18: "next / previous ... pull them from the page")
+            List<string> all = await GameBanana.PictureList(mod);
+            if (all != null && !view.IsDisposed) view.SetAll(all);
+        }
+
+        // a picture full size: from GameBanana, or a song's from its zip ("zip:"); null when it can't be had
+        static async Task<Image> FullSize(string url)
+        {
+            try
+            {
+                byte[] bytes = url.StartsWith("zip:", StringComparison.Ordinal) ? await GameBanana.ZipPicture(url.Substring(4)) : await GameBanana.Bytes(url);
+                return bytes == null ? null : await Task.Run(() => Pictures.Read(bytes));
+            }
+            catch (Exception) { return null; }
         }
 
         async Task Thumbnail(string url, ModCard card)
@@ -1036,10 +1098,16 @@ namespace ExMoreStuff
         List<Control> PackCards(Dictionary<string, InGame> installed)
         {
             var cards = new List<Control>();
-            foreach (var pack in GameBanana.Collections)
+            // sorted by the Newest / Most Downloaded buttons as the mods are (user 2026-11-17: "mod packs dont sort
+            // correctly", they came in GameBanana's order): a pack is as new as its newest mod, its downloads its mods' total
+            var packs = GameBanana.Collections.Select(c => new { Pack = c, Members = entries.Where(e => c.Mods.Contains(e.Mod.Id)).ToList() })
+                                              .Where(x => x.Members.Count > 0).ToList();
+            var sorted = byDownloads ? (mostFirst ? packs.OrderByDescending(x => x.Members.Sum(e => (long)e.Mod.Downloads)) : packs.OrderBy(x => x.Members.Sum(e => (long)e.Mod.Downloads)))
+                                     : (newestFirst ? packs.OrderByDescending(x => x.Members.Max(e => e.Date)) : packs.OrderBy(x => x.Members.Max(e => e.Date)));
+            foreach (var x in sorted)
             {
-                var members = entries.Where(e => pack.Mods.Contains(e.Mod.Id)).ToList();
-                if (members.Count == 0) continue;
+                var pack = x.Pack;
+                var members = x.Members;
                 var p = pack;
                 var card = new PackCard(pack.Name, pack.Owner, members.Count) { Margin = new Padding(6) };
                 card.Page.Page = pack.Page;
@@ -1431,9 +1499,13 @@ namespace ExMoreStuff
     // One mod on the Browse Mods tab: its picture, name, maker (in gold, showing their mods), downloads, where it goes,
     // Install and a tiny blue icon opening its page; once it's in, where it went and "Installed", or Update when its
     // GameBanana files have changed since.
-    class ModCard : Clear
+    class ModCard : Clear, ISolidBelow
     {
+        // under the picture, clear of the rounded edge, it's plain card color: its buttons paint that, not the card again
+        public Color? SolidUnder(Rectangle r) { return new Rectangle(10, 142, Width - 20, Height - 152).Contains(r) ? Theme.CardSolid : (Color?)null; }
+
         public Image Picture;
+        readonly FittedPicture fitted = new FittedPicture();   // Picture scaled once (a scroll paints the card many times)
         readonly string title, extra, goes, into;
         /// <summary>How much it downloads, under the downloads ("-": not known).</summary>
         public string FileSize;
@@ -1479,9 +1551,20 @@ namespace ExMoreStuff
         bool whyShown;
         Rectangle WhyArea { get { return new Rectangle(12, 210, Width - 24, 22); } }
 
+        /// <summary>A click on its picture: GameBanana's picture full size (user 2026-11-17).</summary>
+        public event EventHandler PictureClicked;
+        bool OnPicture(Point p) { return PictureClicked != null && Picture != null && p.Y >= 1 && p.Y < 141; }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            base.OnMouseClick(e);
+            if (e.Button == MouseButtons.Left && OnPicture(e.Location)) PictureClicked(this, e);
+        }
+
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            Cursor = OnPicture(e.Location) ? Cursors.Hand : Cursors.Default;
             bool over = Why != null && WhyDetail != null && WhyArea.Contains(e.Location);
             if (over == whyShown) return;
             whyShown = over;
@@ -1498,6 +1581,7 @@ namespace ExMoreStuff
         protected override void Dispose(bool disposing)
         {
             if (disposing && whyTip != null) { whyTip.Dispose(); whyTip = null; }
+            if (disposing) fitted.Dispose();
             base.Dispose(disposing);
         }
         public event EventHandler AuthorClicked;   // the creator's gold name: their mods are shown
@@ -1597,11 +1681,11 @@ namespace ExMoreStuff
             Smooth(g);
             using (var path = Theme.Rounded(new RectangleF(1, 1, Width - 3, Height - 3), 10))
             {
-                using (var fill = new SolidBrush(Theme.Card)) g.FillPath(fill, path);
+                using (var fill = new SolidBrush(Theme.CardSolid)) g.FillPath(fill, path);
                 g.SetClip(path);
                 var picture = new RectangleF(1, 1, Width - 3, 140);
                 using (var well = new SolidBrush(Theme.Well)) g.FillRectangle(well, picture);
-                if (Picture != null) Theme.Fit(g, Picture, picture, false);
+                fitted.Draw(g, Picture, picture);
                 g.ResetClip();
                 if (section != null) g.DrawImage(section, new Rectangle(Width - 41, 5, 34, 34));   // its GameBanana section, in the corner
                 Color edge = flash > 0 && flash % 6 < 3 ? Theme.AccentHover : into != null ? Color.FromArgb(150, Theme.Accent) : Theme.Line;
@@ -1621,13 +1705,262 @@ namespace ExMoreStuff
                        TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
         }
     }
+    // A mod's pictures full size over Browse Mods (CommunityPanel.ShowFullPicture): shrunk to fit if bigger than the view,
+    // never blown up past their own size; "Loading..." until one's in. The wheel zooms in and out at the pointer (user
+    // 2026-11-17: "zoom in and out of these enlarged images AT the mouse position"), down to the fitted size; zoomed in, a
+    // drag moves it. Every picture on the mod's GameBanana page, read as the view opens (SetAll; user 2026-11-18: "next /
+    // previous when you zoom into images and pull them from the page when you click them"): the arrows at its sides or the
+    // Left and Right keys go round them, each fitted again, "2 / 5" below. A click elsewhere (not a drag) or Esc closes it
+    // (Closed).
+    class FullPicture : Control
+    {
+        readonly string name;
+        readonly Func<string, Task<Image>> load;   // a picture by its address (null when it can't be had)
+        readonly List<string> sources = new List<string>();
+        readonly Dictionary<string, Task<Image>> got = new Dictionary<string, Task<Image>>();   // each read once while it's open
+        int at;                                 // the one shown
+        Image picture;
+        bool loaded;
+        float scale, left, top;                 // the picture's size on screen against its own, and its top left
+        Point downAt;
+        PointF startAt;
+        bool down, dragged;
+        int hover, pressed;                     // the arrow under the pointer / pressed: -1 left, 1 right, 0 none
+        const float MostZoom = 8f;              // up to 8 times its own size
+        const int ArrowSize = 52;
+        public event EventHandler Closed;
+
+        public FullPicture(string name, string first, Func<string, Task<Image>> load)
+        {
+            this.name = name;
+            this.load = load;
+            sources.Add(first);
+            Dock = DockStyle.Fill;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+            BackColor = Color.FromArgb(12, 12, 14);
+            Cursor = Cursors.Hand;
+            var ignored = ShowAt(0);
+        }
+
+        public int Count { get { return sources.Count; } }
+        public int Shown { get { return at; } }
+
+        Rectangle Area { get { return new Rectangle(16, 16, Math.Max(1, Width - 32), Math.Max(1, Height - 32)); } }
+        float Fitted { get { return picture == null ? 1 : Math.Min(1f, Math.Min(Area.Width / (float)picture.Width, Area.Height / (float)picture.Height)); } }
+
+        /// <summary>Every picture on the mod's page, in its order: the one shown keeps its place among them (first when it
+        /// isn't one of them, as a song's picture from its zip).</summary>
+        public void SetAll(IList<string> all)
+        {
+            string shown = sources[at];
+            var list = all.Where(u => !string.IsNullOrEmpty(u)).Distinct().ToList();
+            if (!list.Contains(shown)) list.Insert(0, shown);
+            sources.Clear();
+            sources.AddRange(list);
+            at = sources.IndexOf(shown);
+            if (sources.Count > 1) { var ahead = Get(sources[(at + 1) % sources.Count]); }   // the next one read ahead
+            Invalidate();
+        }
+
+        Task<Image> Get(string url)
+        {
+            Task<Image> image;
+            if (!got.TryGetValue(url, out image)) got[url] = image = load(url);
+            return image;
+        }
+
+        // the picture at `index`, fitted; "Loading..." while it's read; the one after it read ahead
+        async Task ShowAt(int index)
+        {
+            at = index;
+            string url = sources[at];
+            Task<Image> task = Get(url);
+            if (!task.IsCompleted) { picture = null; loaded = false; Reset(); }
+            Image image = null;
+            try { image = await task; } catch (Exception) { }
+            if (IsDisposed || at >= sources.Count || sources[at] != url) return;   // closed, or moved on meanwhile
+            picture = image;
+            loaded = true;
+            Reset();
+            if (sources.Count > 1) { var ahead = Get(sources[(at + 1) % sources.Count]); }
+        }
+
+        /// <summary>The next (1) or previous (-1) picture, round from the last to the first.</summary>
+        public void Go(int step)
+        {
+            if (sources.Count < 2) return;
+            var ignored = ShowAt(((at + step) % sources.Count + sources.Count) % sources.Count);
+        }
+
+        Rectangle Arrow(int side)
+        {
+            int y = (Height - ArrowSize) / 2;
+            return side < 0 ? new Rectangle(20, y, ArrowSize, ArrowSize) : new Rectangle(Width - 20 - ArrowSize, y, ArrowSize, ArrowSize);
+        }
+
+        int ArrowAt(Point p) { return sources.Count < 2 ? 0 : Arrow(-1).Contains(p) ? -1 : Arrow(1).Contains(p) ? 1 : 0; }
+
+        // a hand over the arrows and to close; zoomed in, the drag cross
+        void Pointer(Point p)
+        {
+            Cursor = ArrowAt(p) == 0 && picture != null && scale > Fitted + 0.0001f ? Cursors.SizeAll : Cursors.Hand;
+        }
+
+        // fitted and centered
+        void Reset()
+        {
+            if (picture != null) { scale = Fitted; Keep(); }
+            if (IsHandleCreated) Pointer(PointToClient(MousePosition));
+            Invalidate();
+        }
+
+        // kept in view: centered on a side it doesn't fill, else its edges no further in than the view's
+        void Keep()
+        {
+            Rectangle a = Area;
+            float w = picture.Width * scale, h = picture.Height * scale;
+            left = w <= a.Width ? a.X + (a.Width - w) / 2 : Math.Min(a.X, Math.Max(a.Right - w, left));
+            top = h <= a.Height ? a.Y + (a.Height - h) / 2 : Math.Min(a.Y, Math.Max(a.Bottom - h, top));
+        }
+
+        public void Close()
+        {
+            if (IsDisposed) return;
+            var parent = Parent;
+            if (parent != null) parent.Controls.Remove(this);
+            Dispose();
+            var handler = Closed;
+            if (handler != null) handler(this, EventArgs.Empty);
+        }
+
+        protected override void OnResize(EventArgs e) { base.OnResize(e); if (picture != null) Reset(); }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            var handled = e as HandledMouseEventArgs;
+            if (handled != null) handled.Handled = true;
+            if (picture == null || e.Delta == 0) return;
+            float was = scale;
+            scale = Math.Max(Fitted, Math.Min(MostZoom, scale * (float)Math.Pow(1.2, e.Delta / 120.0)));
+            // the spot under the pointer stays under it
+            left = e.X - (e.X - left) * scale / was;
+            top = e.Y - (e.Y - top) * scale / was;
+            Keep();
+            Pointer(e.Location);
+            Invalidate();
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            Focus();
+            if (e.Button != MouseButtons.Left) return;
+            pressed = ArrowAt(e.Location);
+            if (pressed != 0) return;   // an arrow: no drag, no closing
+            down = true; dragged = false; downAt = e.Location; startAt = new PointF(left, top);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            int over = ArrowAt(e.Location);
+            if (over != hover) { hover = over; Invalidate(); }
+            if (!down) Pointer(e.Location);
+            if (!down || picture == null) return;
+            if (!dragged && Math.Abs(e.X - downAt.X) + Math.Abs(e.Y - downAt.Y) < 5) return;
+            dragged = true;
+            left = startAt.X + e.X - downAt.X;
+            top = startAt.Y + e.Y - downAt.Y;
+            Keep();
+            Invalidate();
+        }
+
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (hover != 0) { hover = 0; Invalidate(); } }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (e.Button != MouseButtons.Left) return;
+            if (pressed != 0) { int side = pressed; pressed = 0; if (ArrowAt(e.Location) == side) Go(side); return; }
+            if (!down) return;
+            down = false;
+            if (!dragged) Close();
+        }
+
+        protected override bool IsInputKey(Keys keys) { return keys == Keys.Escape || keys == Keys.Left || keys == Keys.Right || base.IsInputKey(keys); }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode == Keys.Escape) Close();
+            else if (e.KeyCode == Keys.Left) Go(-1);
+            else if (e.KeyCode == Keys.Right) Go(1);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(BackColor);
+            if (picture != null)
+            {
+                // zoomed past twice its size, its pixels shown sharp
+                g.InterpolationMode = scale > 2f ? System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor : System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                g.DrawImage(picture, left, top, picture.Width * scale, picture.Height * scale);
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Default;
+            }
+            else
+                Theme.Draw(g, loaded ? "Couldn't get " + name + "'s picture from GameBanana." : "Loading " + name + "'s picture...", Theme.Font(11f), Theme.Muted, Area,
+                           TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+            if (sources.Count < 2) return;
+            // the arrows: dark rounds over the picture's sides, lighter under the pointer, a white chevron in each
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            foreach (int side in new[] { -1, 1 })
+            {
+                Rectangle r = Arrow(side);
+                using (var fill = new SolidBrush(Color.FromArgb(hover == side ? 210 : 140, 24, 24, 28))) g.FillEllipse(fill, r);
+                int cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, d = side * 5;
+                using (var pen = new Pen(Color.FromArgb(hover == side ? 255 : 220, 255, 255, 255), 3f) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round, LineJoin = System.Drawing.Drawing2D.LineJoin.Round })
+                    g.DrawLines(pen, new[] { new Point(cx - d, cy - 10), new Point(cx + d, cy), new Point(cx - d, cy + 10) });
+            }
+            // which one of how many, below
+            string count = (at + 1) + " / " + sources.Count;
+            Font font = Theme.Font(10f);
+            Size size = TextRenderer.MeasureText(count, font);
+            var pill = new RectangleF((Width - size.Width - 24) / 2f, Height - 16 - size.Height - 8, size.Width + 24, size.Height + 8);
+            using (var path = Theme.Rounded(pill, pill.Height / 2))
+            using (var fill = new SolidBrush(Color.FromArgb(170, 24, 24, 28)))
+                g.FillPath(fill, path);
+            Theme.Draw(g, count, font, Color.FromArgb(235, 235, 235), Rectangle.Round(pill), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // every picture read, and any still on its way when it's in
+                foreach (var image in got.Values)
+                    if (image.Status == TaskStatus.RanToCompletion) { if (image.Result != null) image.Result.Dispose(); }
+                    else image.ContinueWith(t => { if (t.Status == TaskStatus.RanToCompletion && t.Result != null) t.Result.Dispose(); });
+                got.Clear();
+                picture = null;
+            }
+            base.Dispose(disposing);
+        }
+    }
+
     // A Mod Pack on the Mod Packs page (user 2026-10-14: "each pack gets its own card"): its 4 newest mods' pictures as one
     // (CommunityPanel.PackPicture), its name, "by" its maker in gold and how many mods; its button (Install pack, UPDATE,
     // All installed) at the bottom left, its GameBanana page and its maker's Ko-fi / Patreon at the bottom right. A click on
     // the picture or the name shows its mods (Opened).
-    class PackCard : Clear
+    class PackCard : Clear, ISolidBelow
     {
+        // under the picture, clear of the rounded edge, it's plain card color: its buttons paint that, not the card again
+        public Color? SolidUnder(Rectangle r) { return new Rectangle(10, 142, Width - 20, Height - 152).Contains(r) ? Theme.CardSolid : (Color?)null; }
+
         public Image Picture;
+        readonly FittedPicture fitted = new FittedPicture();   // Picture scaled once
         public readonly FlatButton Action = new FlatButton("Install pack", true);
         public readonly PageButton Page = new PageButton();
         public readonly HeartButton Heart = new HeartButton();   // its maker a favorite, as on mod cards (user 2026-10-14: "the card is missing the heart")
@@ -1688,6 +2021,7 @@ namespace ExMoreStuff
         protected override void Dispose(bool disposing)
         {
             if (disposing && Picture != null) { Picture.Dispose(); Picture = null; }
+            if (disposing) fitted.Dispose();
             base.Dispose(disposing);
         }
 
@@ -1697,11 +2031,11 @@ namespace ExMoreStuff
             Smooth(g);
             using (var path = Theme.Rounded(new RectangleF(1, 1, Width - 3, Height - 3), 10))
             {
-                using (var fill = new SolidBrush(Theme.Card)) g.FillPath(fill, path);
+                using (var fill = new SolidBrush(Theme.CardSolid)) g.FillPath(fill, path);
                 g.SetClip(path);
                 var picture = new RectangleF(1, 1, Width - 3, 140);
                 using (var well = new SolidBrush(Theme.Well)) g.FillRectangle(well, picture);
-                if (Picture != null) g.DrawImage(Picture, picture);
+                fitted.Draw(g, Picture, picture, true);
                 g.ResetClip();
                 using (var pen = new Pen(hover ? Theme.AccentHover : Theme.Line)) g.DrawPath(pen, path);
             }

@@ -35,8 +35,34 @@ namespace ExMoreStuff
                 ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                Application.ThreadException += (s, e) => Crashed(e.Exception, true);
+                AppDomain.CurrentDomain.UnhandledException += (s, e) => Crashed(e.ExceptionObject as Exception, false);
                 Application.Run(new MainForm());
             }
+        }
+
+        [DllImport("user32.dll")] static extern int GetGuiResources(IntPtr process, int flags);
+
+        // An error nothing caught (user 2026-11-18: a crash where Windows' own error box couldn't open, "Error creating
+        // window handle", so nothing said what went wrong): written to crash_log.txt beside the program first, with the
+        // window and drawing handles held (Windows stops at 10,000), then the usual error box; when even that can't
+        // open, the program closes.
+        static void Crashed(Exception error, bool canGoOn)
+        {
+            try
+            {
+                IntPtr me = Process.GetCurrentProcess().Handle;
+                File.AppendAllText(AppFolders.DataFile("crash_log.txt"), DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  EX More Stuff " + Application.ProductVersion +
+                                   "  window handles " + GetGuiResources(me, 1) + ", drawing handles " + GetGuiResources(me, 0) + Environment.NewLine + error + Environment.NewLine + Environment.NewLine);
+            }
+            catch (Exception) { }
+            if (!canGoOn) return;   // the runtime ends it
+            try
+            {
+                using (var box = new ThreadExceptionDialog(error))
+                    if (box.ShowDialog() == DialogResult.Abort) Environment.Exit(1);
+            }
+            catch (Exception) { Environment.Exit(1); }
         }
 
         [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);

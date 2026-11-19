@@ -40,6 +40,7 @@ namespace ExMoreStuff
 
             Call(slider, "OnMouseDown", new MouseEventArgs(MouseButtons.Left, 1, 8, slider.Height - 5, 0));
             Call(slider, "OnMouseUp", new MouseEventArgs(MouseButtons.Left, 1, 8, slider.Height - 5, 0));
+            for (var glide = System.Diagnostics.Stopwatch.StartNew(); glide.ElapsedMilliseconds < 700; ) { Application.DoEvents(); System.Threading.Thread.Sleep(5); }   // a page glides there too (2026-11-19)
             Check(list.VerticalScroll.Value > dragged, "clicking the track below it pages down (" + list.VerticalScroll.Value + ")");
 
             int before = list.VerticalScroll.Value;

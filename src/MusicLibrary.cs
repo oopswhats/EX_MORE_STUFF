@@ -266,7 +266,14 @@ namespace ExMoreStuff
             public string Name, From, ModKey;
             public string PictureZip;   // the zip whose picture is its thumbnail, or null
             public List<string> Files = new List<string>();
+            // when it was added (user 2026-11-17: "date and time"), from its file, so songs added before this was shown
+            // get theirs too: a song mod's zip or a song file when it came; a made song when it was last saved (saved
+            // again, it's the new song: "look its not here", a song saved again still showing its first save's time)
+            public DateTime Added;
         }
+
+        static DateTime Created(string path) { try { return File.GetCreationTime(path); } catch (Exception) { return DateTime.MinValue; } }
+        static DateTime Saved(string path) { try { return File.GetLastWriteTime(path); } catch (Exception) { return DateTime.MinValue; } }
 
         /// <summary>The player's own songs: song mods (by their creator), songs made on Advanced > Music, song files.</summary>
         public static List<Owner> Owned(string game)
@@ -274,11 +281,11 @@ namespace ExMoreStuff
             var owned = new List<Owner>();
             var mods = SongMods.Load();
             foreach (var m in mods.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase))
-                owned.Add(new Owner { Name = m.Name, From = string.IsNullOrEmpty(m.Author) ? "Song mod" : "Song mod by " + m.Author, ModKey = m.Key, PictureZip = Path.Combine(SongsFolder, m.File) });
+                owned.Add(new Owner { Name = m.Name, From = string.IsNullOrEmpty(m.Author) ? "Song mod" : "Song mod by " + m.Author, ModKey = m.Key, PictureZip = Path.Combine(SongsFolder, m.File), Added = Created(Path.Combine(SongsFolder, m.File)) });
             var modFiles = new HashSet<string>(mods.Select(m => m.File), StringComparer.OrdinalIgnoreCase);
             if (Directory.Exists(SongsFolder))
                 foreach (string path in Directory.GetFiles(SongsFolder).Where(f => (f.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".csb", StringComparison.OrdinalIgnoreCase)) && !modFiles.Contains(Path.GetFileName(f))))
-                    owned.Add(new Owner { Name = Path.GetFileNameWithoutExtension(path), From = "A song file in Mods\\Music", Files = { path }, PictureZip = path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? path : null });
+                    owned.Add(new Owner { Name = Path.GetFileNameWithoutExtension(path), From = "A song file in Mods\\Music", Files = { path }, PictureZip = path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? path : null, Added = Created(path) });
             // custom stages by their names ("Mishima Estate Rooftop"), as the Music tab shows them
             var stageNames = Installer.Load(game).Concat(Installer.Removed(game)).Where(r => r.Item.IsStage).GroupBy(r => r.Item.Code, StringComparer.OrdinalIgnoreCase)
                                       .ToDictionary(g => g.Key, g => g.First().Shown ?? g.First().Item.Name, StringComparer.OrdinalIgnoreCase);
@@ -287,7 +294,7 @@ namespace ExMoreStuff
                 {
                     string stem = Path.GetFileNameWithoutExtension(bank);
                     var tagged = Regex.Match(stem, @"^([A-Za-z0-9]{3})_([123])_(MAIN|ULTRA|LOWHP)_(.+)$", RegexOptions.IgnoreCase);   // TRN_1_MAIN_Jackson
-                    var o = new Owner { Name = tagged.Success ? tagged.Groups[4].Value : stem, From = "Made on Advanced > Music" + (tagged.Success ? " for " + Where(tagged.Groups[1].Value, stageNames) : "") };
+                    var o = new Owner { Name = tagged.Success ? tagged.Groups[4].Value : stem, From = "Made on Advanced > Music" + (tagged.Success ? " for " + Where(tagged.Groups[1].Value, stageNames) : ""), Added = Saved(bank) };
                     // its game file, and the song it was made from and its settings beside it (TRN_1_MAIN_Jackson.mp3, .json)
                     o.Files.AddRange(Directory.GetFiles(AppFolders.Music, stem + ".*"));
                     owned.Add(o);
@@ -349,6 +356,37 @@ namespace ExMoreStuff
 
         /// <summary>A slot's own music back (the song set on it off).</summary>
         public static string Own(string game, MusicSlot slot) { return MusicBank.Remove(game, slot); }
+
+        /// <summary>What a docked stage's slot plays, to hear: its docked file's music there, else its stand-in's.</summary>
+        public static Entry DockedNow(string game, string zip, MusicSlot slot, string name)
+        {
+            string standIn = MusicBank.GameFile(game, slot.TemplateFile);
+            return new Entry { Key = "docked:" + zip + "|" + slot.File, Name = name, Read = () => DockedMusic.Bank(zip, slot.File) ?? File.ReadAllBytes(standIn) };
+        }
+
+        /// <summary>`song` into a docked stage's file for `slot` (user 2026-11-18: picked on the Music tab), as Use puts it in
+        /// the game: whole when it's a stage's, else its main song built onto the stand-in's music. Off the window's thread.</summary>
+        public static void UseDocked(string game, string zip, MusicSlot slot, Entry song)
+        {
+            byte[] bank = song.Read();
+            InstalledSong about;
+            if (MusicBank.CueCount(bank) >= 3)
+                about = new InstalledSong { Song = song.Name, Layers = new[] { song.Name, song.Name, song.Name } };
+            else
+            {
+                int loopStart;
+                Song decoded = MusicBank.Decode(bank, 0, song.Name, out loopStart);
+                byte[] standIn = File.ReadAllBytes(MusicBank.GameFile(game, slot.TemplateFile));
+                bank = MusicPanel.BuildFor(game, null, slot, 0, decoded.Pcm, loopStart, decoded.Frames, song.Name, 0, 0, null, out about, standIn);
+            }
+            DockedMusic.Put(zip, slot.File, bank, about);
+        }
+
+        /// <summary>A docked stage's music for `slot` out of its file (the zip written only when it has some).</summary>
+        public static void TakeOutDocked(string zip, MusicSlot slot)
+        {
+            if (DockedMusic.Has(zip, slot.File)) DockedMusic.TakeOut(zip, slot.File);
+        }
 
         /// <summary>A song's main song whole, to play in the Music tab's bar, and where it loops back to. Off the window's thread.</summary>
         public static short[] Decode(Entry song, out int loopStart)

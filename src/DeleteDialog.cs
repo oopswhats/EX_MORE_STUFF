@@ -47,6 +47,8 @@ namespace ExMoreStuff
         protected override bool ProcessCmdKey(ref Message msg, Keys keys)
         {
             if (keys == Keys.Escape) { Picked = Choice.Cancel; DialogResult = DialogResult.Cancel; return true; }
+            // Enter deletes (user 2026-11-17: "let me press enter here to confirm")
+            if (keys == Keys.Enter) { Picked = Choice.Delete; DialogResult = DialogResult.OK; return true; }
             return base.ProcessCmdKey(ref msg, keys);
         }
     }

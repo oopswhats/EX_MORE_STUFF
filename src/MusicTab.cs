@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -23,6 +24,10 @@ namespace ExMoreStuff
         readonly BigToggle stagesButton = new BigToggle("STAGES"), fightersButton = new BigToggle("CHARACTERS"), manageButton = new BigToggle("MANAGE MUSIC");
         // STAGES and CHARACTERS on the left, MANAGE MUSIC on the far right (user 2026-10-16)
         readonly Clear toggles = new Clear { Height = 54, Margin = new Padding(6, 4, 6, 10) };
+        // MANAGE MUSIC's order (user 2026-11-17: "a sorting toggle newest/a-z. no need for oldest"), kept while EX More Stuff is open
+        static bool byName;
+        readonly FlatButton newestButton = new FlatButton("Newest"), nameButton = new FlatButton("A-Z");
+        readonly Clear sortRow = new Clear { Height = 34, Margin = new Padding(6, 0, 6, 6) };
         static readonly Dictionary<string, Image> portraits = new Dictionary<string, Image>();
         // the player at the bottom (user 2026-10-16: "a second bottom bar ... a scroll bar for the track, play and pause,
         // volume. default start volume here at 33%"): this tab's own, nothing shared with Advanced > Music
@@ -48,6 +53,9 @@ namespace ExMoreStuff
             stagesButton.Click += (s, e) => ShowView(0);
             fightersButton.Click += (s, e) => ShowView(1);
             manageButton.Click += (s, e) => ShowView(2);
+            sortRow.Controls.AddRange(new Control[] { newestButton, nameButton });
+            newestButton.Click += (s, e) => SortBy(false);
+            nameButton.Click += (s, e) => SortBy(true);
             player.Volume = (float)bar.Volume.Value;
             bar.Volume.Moved += () => player.Volume = (float)bar.Volume.Value;
             bar.Toggle.Click += (s, e) => Toggle();
@@ -111,6 +119,14 @@ namespace ExMoreStuff
             list.AutoScrollPosition = Point.Empty;
         }
 
+        void SortBy(bool name)
+        {
+            if (byName == name) return;
+            byName = name;
+            Fill();
+            list.AutoScrollPosition = Point.Empty;
+        }
+
         public void SetGame(string folder)
         {
             game = folder;
@@ -131,34 +147,55 @@ namespace ExMoreStuff
             if (game != null && Visible && list.ClientSize.Width > 200 && Math.Abs(list.ClientSize.Width - filledWidth) > 4) Fill();
         }
 
-        // a card each: (the slot, its name, its picture or null while it loads)
-        List<Tuple<MusicSlot, string, Func<Image>>> Slots()
+        // a card each: (the slot, its name, its picture or null while it loads, a docked stage's zip or null)
+        List<Tuple<MusicSlot, string, Func<Image>, string>> Slots()
         {
-            var slots = new List<Tuple<MusicSlot, string, Func<Image>>>();
+            var slots = new List<Tuple<MusicSlot, string, Func<Image>, string>>();
             if (fighters)
             {
                 foreach (int id in Fighters.DisplayOrder)
                 {
                     string code = Fighters.Codes[id];
-                    slots.Add(Tuple.Create(new MusicSlot { Code = code, Fighter = true }, Fighters.Names[id], (Func<Image>)(() => { Image p; return portraits.TryGetValue(code, out p) ? p : null; })));
+                    slots.Add(Tuple.Create(new MusicSlot { Code = code, Fighter = true }, Fighters.Names[id], (Func<Image>)(() => { Image p; return portraits.TryGetValue(code, out p) ? p : null; }), (string)null));
                 }
                 return slots;
             }
+            // docked stages first, as on Advanced > Music (user 2026-11-18: "files are docked but i cant change it in the music
+            // tab"): a song picked goes into the docked file (DockedMusic), not the game
+            if (Game.IsGameFolder(game))
+                foreach (Installed d in Docked.Load().Where(r => r.Item.IsStage))
+                {
+                    var slot = new MusicSlot { Code = d.Item.Code };
+                    if (MusicBank.GameFile(game, slot.TemplateFile) == null) continue;   // no stand-in music to build on
+                    Image picture = Picture(d);
+                    string name = Regex.Replace(d.Item.Name, @"\s*-\s*" + Regex.Escape(d.Item.Code) + "$", "", RegexOptions.IgnoreCase);   // as installed ones show (a code didn't fit)
+                    slots.Add(Tuple.Create(slot, name, (Func<Image>)(() => picture), d.Package));
+                }
             // the game's (its stage select's order), then GameBanana's, then the player's own (user 2026-10-16: "vanilla
             // stages > custom banana stages > user insert stages")
             foreach (string code in StageGrid.Grid.Where(c => c != null))
             {
                 string c = code;
-                slots.Add(Tuple.Create(new MusicSlot { Code = c }, Stages.Name(c), (Func<Image>)(() => { try { return Stages.Picture(c); } catch (Exception) { return null; } })));
+                slots.Add(Tuple.Create(new MusicSlot { Code = c }, Stages.Name(c), (Func<Image>)(() => { try { return Stages.Picture(c); } catch (Exception) { return null; } }), (string)null));
             }
             if (Game.IsGameFolder(game))
                 foreach (Installed r in Installer.Load(game).Where(r => r.Item.IsStage).OrderBy(r => (r.Item.Id ?? "").StartsWith("gamebanana:") ? 0 : 1).ThenBy(r => r.Item.Code))
                 {
                     Installed record = r;
                     Image picture = Picture(record);
-                    slots.Add(Tuple.Create(new MusicSlot { Code = record.Item.Code }, record.Shown ?? record.Item.Name, (Func<Image>)(() => picture)));
+                    slots.Add(Tuple.Create(new MusicSlot { Code = record.Item.Code }, record.Shown ?? record.Item.Name, (Func<Image>)(() => picture), (string)null));
                 }
             return slots;
+        }
+
+        // a card's song in the bar: its slot's file (a docked stage's: its zip's too, as the same code may be installed)
+        static string TrackKey(MusicSlot slot, string docked) { return docked == null ? slot.File : "docked:" + docked + "|" + slot.File; }
+
+        // the song a docked stage's round plays from its docked file, put there from the Music tab or Advanced > Music; null: none
+        static string DockedPlaying(string zip, MusicSlot slot)
+        {
+            try { InstalledSong s = DockedMusic.Song(zip, slot.File); return s == null ? null : s.Layers[0] ?? s.Song; }
+            catch (Exception) { return null; }
         }
 
         void Fill()
@@ -188,23 +225,30 @@ namespace ExMoreStuff
             var cards = new List<SlotCard>();
             int cardWidth = (width - 2 * 12) / 2;
             if (view == 2) controls.AddRange(ManageRows(width));
-            else foreach (var s in Slots())
+            else
             {
-                MusicSlot slot = s.Item1;
-                string name = s.Item2, playing = MusicLibrary.Playing(installed, slot);
-                var card = new SlotCard
+                var all = Slots();
+                bool anyDocked = all.Any(s => s.Item4 != null), stagesShown = false;
+                if (anyDocked) controls.Add(new Heading("Docked", width) { Font = Theme.Bold(11f), Height = 34 });
+                foreach (var s in all)
                 {
-                    Size = new Size(cardWidth, 84), Margin = new Padding(6, 4, 6, 4), Picture = s.Item3(), Caption = name, Fighter = slot.Fighter,
-                    Song = playing ?? MusicLibrary.OwnName(slot, name), Changed = playing != null,
-                };
-                card.Clicked += () => Pick(slot, name);
-                card.Play.Click += (o, e) => Listen(slot, name, card);
-                if (trackKey == slot.File) { trackCard = card; card.Playing = player.Playing && pausedAt < 0; }
-                cards.Add(card);
-                controls.Add(card);
+                    MusicSlot slot = s.Item1;
+                    string name = s.Item2, docked = s.Item4, playing = docked != null ? DockedPlaying(docked, slot) : MusicLibrary.Playing(installed, slot);
+                    if (anyDocked && docked == null && !stagesShown) { controls.Add(new Heading("Stages", width) { Font = Theme.Bold(11f), Height = 34 }); stagesShown = true; }
+                    var card = new SlotCard
+                    {
+                        Size = new Size(cardWidth, 84), Margin = new Padding(6, 4, 6, 4), Picture = s.Item3(), Caption = name, Fighter = slot.Fighter,
+                        Song = playing ?? MusicLibrary.OwnName(slot, name), Changed = playing != null,
+                    };
+                    card.Clicked += () => Pick(slot, name, docked);
+                    card.Play.Click += (o, e) => Listen(slot, name, card, docked);
+                    if (trackKey == TrackKey(slot, docked)) { trackCard = card; card.Playing = player.Playing && pausedAt < 0; }
+                    cards.Add(card);
+                    controls.Add(card);
+                }
             }
             list.SuspendLayout();
-            foreach (Control c in list.Controls.Cast<Control>().ToList()) if (c != status && c != toggles) c.Dispose();
+            foreach (Control c in list.Controls.Cast<Control>().ToList()) if (c != status && c != toggles && c != sortRow) c.Dispose();
             list.Controls.Clear();
             foreach (Control c in controls) { list.Controls.Add(c); if (!(c is SlotCard)) list.SetFlowBreak(c, true); }
             list.ResumeLayout();
@@ -222,10 +266,24 @@ namespace ExMoreStuff
                 rows.Add(ShadowLabel.Note("No songs of your own yet: songs you make on Advanced > Music and song mods you install from Browse Mods show here.", width));
                 return rows;
             }
-            foreach (var o in owned)
+            newestButton.Primary = !byName;
+            nameButton.Primary = byName;
+            int x = 0;
+            foreach (FlatButton b in new[] { newestButton, nameButton })
+            {
+                b.Width = TextRenderer.MeasureText(b.Text, b.Font).Width + 30;
+                b.Location = new Point(x, 0);
+                x = b.Right + 8;
+                b.Invalidate();
+            }
+            sortRow.Width = width - 12;
+            rows.Add(sortRow);
+            var culture = System.Globalization.CultureInfo.CurrentCulture;
+            foreach (var o in byName ? owned.OrderBy(o => o.Name, StringComparer.CurrentCultureIgnoreCase).ToList() : owned.OrderByDescending(o => o.Added).ToList())
             {
                 MusicLibrary.Owner song = o;
-                var row = new ManageRow { Size = new Size(width - 12, 56), Margin = new Padding(6, 3, 6, 3), Title = song.Name, Detail = song.From };
+                var row = new ManageRow { Size = new Size(width - 12, 56), Margin = new Padding(6, 3, 6, 3), Title = song.Name,
+                                       Detail = song.From + (song.Added > DateTime.MinValue ? "  ·  Added " + song.Added.ToString("MMM d, yyyy", culture) + ", " + song.Added.ToString("t", culture) : "") };
                 row.LoadThumbnail(song.PictureZip);
                 row.Uninstall.Click += (s, e) => Uninstall(song);
                 rows.Add(row);
@@ -277,10 +335,11 @@ namespace ExMoreStuff
 
         // a card's ▶: its song in the bar, from 30 seconds in (user: "listen to a part of it 30 seconds in"); pressed again,
         // paused, then on from there (user 2026-10-16: "if i press it again its just play again")
-        async void Listen(MusicSlot slot, string name, SlotCard card)
+        async void Listen(MusicSlot slot, string name, SlotCard card, string docked)
         {
-            if (trackKey == slot.File && track != null) { trackCard = card; Toggle(); return; }
-            var song = MusicLibrary.Now(game, slot, card.Song);
+            string key = TrackKey(slot, docked);
+            if (trackKey == key && track != null) { trackCard = card; Toggle(); return; }
+            var song = docked != null ? MusicLibrary.DockedNow(game, docked, slot, card.Song) : MusicLibrary.Now(game, slot, card.Song);
             if (song == null) return;
             StopAll();
             if (trackCard != null && !trackCard.IsDisposed) trackCard.Playing = false;
@@ -292,14 +351,15 @@ namespace ExMoreStuff
             if (card.IsDisposed || !Visible) return;
             track = pcm;
             trackLoop = loop;
-            trackKey = slot.File;
+            trackKey = key;
             trackCard = card;
             PlayFrom(Frames > 40 * Song.Rate ? 30 * Song.Rate : 0);
             Tick();
         }
 
         // a card clicked: its songs, and the one picked goes in
-        async void Pick(MusicSlot slot, string name)
+        // (a docked stage's, `docked` its zip: into the docked file, so the game may be open)
+        async void Pick(MusicSlot slot, string name, string docked)
         {
             StopAll();
             List<MusicLibrary.Entry> songs;
@@ -308,7 +368,7 @@ namespace ExMoreStuff
             catch (Exception ex) { Say(ex.Message, true); return; }
             // what each round plays (a fighter's theme: every round, round 1's)
             var playing = new string[3];
-            for (int r = 1; r <= (slot.Fighter ? 1 : 3); r++) playing[r - 1] = MusicLibrary.Playing(installed, slot.InRound(r));
+            for (int r = 1; r <= (slot.Fighter ? 1 : 3); r++) playing[r - 1] = docked != null ? DockedPlaying(docked, slot.InRound(r)) : MusicLibrary.Playing(installed, slot.InRound(r));
             MusicLibrary.Entry[] picks;
             bool own;
             using (var ask = new SongDialog(name, slot, songs, playing, (float)bar.Volume.Value))
@@ -317,12 +377,13 @@ namespace ExMoreStuff
                 picks = ask.Picks;
                 own = ask.Own;
             }
-            if (Game.IsRunning()) { Say("Close the game first", true); return; }
+            if (docked == null && Game.IsRunning()) { Say("Close the game first", true); return; }
             // one song for every round: round 1's file, no round 2 or 3 of its own (the game plays it all match)
             bool every = !own && picks[0] != null && (slot.Fighter || (picks[1] == picks[0] && picks[2] == picks[0]));
-            // its own song picked for round 1: its own music back, rather than a copy of it
+            // its own song picked for round 1: its own music back, rather than a copy of it (a docked stage's: the same code
+            // installed is another file, its song put in whole)
             string ownKey = slot.Fighter ? "fighter:" + slot.Code : Stages.IsCustomCode(slot.Code) ? "custom:" + slot.Code : "stage:" + slot.Code;
-            bool ownFirst = picks[0] != null && picks[0].Key == ownKey;
+            bool ownFirst = docked == null && picks[0] != null && picks[0].Key == ownKey;
             string g = game, problem = null;
             Busy(true);
             Say(own ? "Giving " + name + " its own music..." : "Putting the music on " + name + "...");
@@ -330,6 +391,14 @@ namespace ExMoreStuff
             {
                 problem = await Task.Run(() =>
                 {
+                    if (docked != null)
+                    {
+                        Action<int> takeOut = r => MusicLibrary.TakeOutDocked(docked, slot.InRound(r));
+                        if (own) { takeOut(1); takeOut(2); takeOut(3); }
+                        else if (every) { MusicLibrary.UseDocked(g, docked, slot, picks[0]); takeOut(2); takeOut(3); }
+                        else for (int r = 1; r <= 3; r++) if (picks[r - 1] != null) MusicLibrary.UseDocked(g, docked, slot.InRound(r), picks[r - 1]);
+                        return (string)null;
+                    }
                     var notes = new List<string>();
                     Action<int> off = r => { string n = MusicLibrary.Own(g, slot.InRound(r)); if (n != null) notes.Add(n); };
                     if (own) { off(1); if (!slot.Fighter) { off(2); off(3); } }
@@ -347,13 +416,16 @@ namespace ExMoreStuff
             }
             catch (Exception ex) { problem = ex.Message; }
             finally { Busy(false); }
-            if (trackKey == slot.File) { track = null; trackKey = null; bar.Show(null, null); Tick(); }   // its song changed: out of the bar
+            if (trackKey == TrackKey(slot, docked)) { track = null; trackKey = null; bar.Show(null, null); Tick(); }   // its song changed: out of the bar
             int scrolled = -list.AutoScrollPosition.Y;
             Fill();
             list.AutoScrollPosition = new Point(0, scrolled);
             var changed = Changed;
             if (changed != null) changed();
             if (problem != null) Say(problem, true);
+            else if (docked != null && own) Say(name + "'s music is out of the docked file");   // as Advanced > Music says it
+            else if (docked != null && every) Say(picks[0].Name + " is in the docked file for " + name);
+            else if (docked != null) Say(string.Join(", ", Enumerable.Range(1, 3).Where(r => picks[r - 1] != null).Select(r => picks[r - 1].Name + " for round " + r)) + " in the docked file for " + name);
             else if (own) Say(name + " plays its own music again");
             else if (every) Say(name + " plays " + picks[0].Name + " now");
             else Say(name + " plays " + string.Join(", ", Enumerable.Range(1, 3).Where(r => picks[r - 1] != null).Select(r => picks[r - 1].Name + " in round " + r)) + " now");

@@ -144,6 +144,8 @@ namespace ExMoreStuff
             smooth.CheckedChanged += (s, e) => LoopChanged();
             loud.CheckedChanged += (s, e) => LoopChanged();
             bassPreview.CheckedChanged += (s, e) => { if (player.Playing) Play(Math.Max(0, player.Position), loop.Checked); };
+            // Loop switched while playing: on from where it is, with or without the loop (it waited for the next Play)
+            loop.CheckedChanged += (s, e) => { if (player.Playing) Play(Math.Max(0, player.Position), loop.Checked); };
             gameLevel.CheckedChanged += (s, e) => player.Volume = Loudness();
             listen.Moved += () => player.Volume = Loudness();
             listenLabel.Text = "Preview Volume";
@@ -591,23 +593,37 @@ namespace ExMoreStuff
             return MusicBank.GameFile(game, t.TemplateFile);
         }
 
+        // a docked stage's (user 2026-11-18: a song put in on the Music tab, "open what the game plays here" opened the stand-in's):
+        // its docked file's music, the same round fallbacks; null: none in it
+        byte[] PlayedDocked()
+        {
+            var t = Target;
+            for (int r = t.Round; r >= 1; r--)
+            {
+                byte[] bank = DockedBank(docked, t.InRound(r).File);
+                if (bank != null) return bank;
+            }
+            return null;
+        }
+
         async Task OpenGameTheme()
         {
             if (slot == null) return;
-            bool ours;
-            string path = PlayedFile(out ours);
-            if (path == null) { Say("The game has no music for " + slot.Name, true); return; }
-            string name = slot.Name + (Target.Round > 1 ? " round " + Target.Round : "") + (Layer > 0 ? " " + MusicBank.LayerNames[Layer].ToLowerInvariant() : "");
+            bool ours = false;
+            byte[] inDocked = docked != null ? PlayedDocked() : null;
+            string path = inDocked != null ? null : PlayedFile(out ours);
+            if (inDocked == null && path == null) { Say("The game has no music for " + slot.Name, true); return; }
+            string name = (docked != null ? dockedName : slot.Name) + (Target.Round > 1 ? " round " + Target.Round : "") + (Layer > 0 ? " " + MusicBank.LayerNames[Layer].ToLowerInvariant() : "");
             Song loaded = null;
             int ls = 0, cue = Layer;
-            if (!await Run("Opening " + name, () => loaded = MusicBank.Decode(File.ReadAllBytes(path), cue, name, out ls))) return;
+            if (!await Run("Opening " + name, () => loaded = MusicBank.Decode(inDocked ?? File.ReadAllBytes(path), cue, name, out ls))) return;
             songFile = null;
             loaded.LoopStart = ls;
             loaded.LoopEnd = loaded.Frames;
             loaded.GameLoop = true;
             SetVolume(0); ultraMode.Selected = 0; lowMode.Selected = 0; ShowVolumeBox();   // a new song: volume 0, Ultra and Low health This song
             SetSong(loaded, ls, loaded.Frames);
-            Say("This is what the game plays for " + name + (ours ? " now (from patch_ae2_tu3)" : ""));
+            Say("This is what the game plays for " + name + (inDocked != null ? " now (from the docked file)" : ours ? " now (from patch_ae2_tu3)" : ""));
         }
 
         void SetSong(Song s, int ls, int le)
@@ -842,17 +858,20 @@ namespace ExMoreStuff
         // cut (made again only when something changes; the volume step only when the gain does)
         short[] leveled;
         string leveledKey;
-        short[] Preview(bool bass)
+        // `looping` false: listened to straight through (Loop off), so no seam smoothing: its blend into the loop start
+        // before the loop end is heard as a hitch there when nothing jumps back (user 2026-11-17)
+        short[] Preview(bool bass, bool looping = true)
         {
             double gain = Gain();
-            string key = wave.LoopStart + "|" + wave.LoopEnd + "|" + smooth.Checked + "|" + gain.ToString("R") + "|" + bass;
+            bool seam = smooth.Checked && looping;
+            string key = wave.LoopStart + "|" + wave.LoopEnd + "|" + seam + "|" + gain.ToString("R") + "|" + bass;
             if (preview != null && previewKey == key) return preview;
             if (leveled == null || leveledKey != gain.ToString("R"))
             {
                 leveled = MusicBank.Level(song.Pcm, gain);
                 leveledKey = gain.ToString("R");
             }
-            var pcm = smooth.Checked ? LoopFinder.SmoothSeam(leveled, wave.LoopStart, wave.LoopEnd, Song.Rate * 3 / 100) : leveled;
+            var pcm = seam ? LoopFinder.SmoothSeam(leveled, wave.LoopStart, wave.LoopEnd, Song.Rate * 3 / 100) : leveled;
             if (bass) pcm = MusicBank.LowHealthVersion(pcm);
             preview = pcm;
             previewKey = key;
@@ -864,7 +883,7 @@ namespace ExMoreStuff
         {
             if (song == null) return;
             player.Volume = Loudness();
-            try { player.Play(Preview(bassPreview.Checked), from, looping, wave.LoopStart, wave.LoopEnd); timer.Start(); }
+            try { player.Play(Preview(bassPreview.Checked, looping), from, looping, wave.LoopStart, wave.LoopEnd); timer.Start(); }
             catch (Exception ex) { Say(ex.Message, true); }
         }
 
@@ -910,6 +929,15 @@ namespace ExMoreStuff
                 if (mine != null && !(File.Exists(ourFile) && Installer.Sha256(ourFile) == mine.Sha256)) mine = null;
                 bank = mine != null ? File.ReadAllBytes(ourFile) : gameBank;
                 layers = mine != null ? (string[])mine.Layers.Clone() : new string[3];
+                // our file made on another stage's bank than the stand-in's (user 2026-11-17: Battle Fantasia - Ship, U15,
+                // its music on BRX's bank, U15's stand-in JPX: "the bank lacks the game's sound Synth/STAGE/JPX/s_bgm_00_wav"):
+                // that stage's names each layer's sound, as for a docked file; none of the game's: built on the stand-in's afresh
+                if (mine != null && !MusicBank.HasSounds(bank, gameBank))
+                {
+                    string on = MusicBank.BuiltOn(game, bank);
+                    if (on != null) gameBank = File.ReadAllBytes(on);
+                    else { bank = gameBank; layers = new string[3]; }
+                }
             }
             int cues = MusicBank.CueCount(gameBank);
             bank = MusicBank.Build(bank, gameBank, layerIndex, pcm, ls, le);

@@ -33,6 +33,8 @@ namespace ExMoreStuff
         public static readonly Color Tile = Color.FromArgb(232, 13, 14, 18);
         public static readonly Color TileHover = Color.FromArgb(240, 30, 32, 39);
         public static readonly Color Card = Color.FromArgb(242, 27, 29, 35);
+        // Card with nothing showing through: Browse Mods' cards, whose buttons paint it under them (ISolidBelow)
+        public static readonly Color CardSolid = Color.FromArgb(255, 27, 29, 35);
         public static readonly Color Well = Color.FromArgb(10, 11, 14);
         public static readonly Color Line = Color.FromArgb(36, 255, 255, 255);
         public static readonly Color Button = Color.FromArgb(44, 47, 55);
@@ -83,6 +85,25 @@ namespace ExMoreStuff
             float scale = Math.Min(box.Width / image.Width, box.Height / image.Height);
             float w = image.Width * scale, h = image.Height * scale;
             g.DrawImage(image, box.X + (box.Width - w) / 2, bottom ? box.Bottom - h : box.Y + (box.Height - h) / 2, w, h);
+        }
+
+        /// <summary>The piece `part` of an opaque picture laid at 0,0 (the window's backdrop), copied as it is. Drawing the
+        /// whole of it for each control the art shows through cost every card of a scrolling list a full window of art
+        /// (user 2026-11-19: Browse Mods Page Down "not smooth it jumps a lot").</summary>
+        public static void DrawPart(Graphics g, Image picture, Rectangle part)
+        {
+            part.Intersect(new Rectangle(Point.Empty, picture.Size));
+            if (part.Width <= 0 || part.Height <= 0) return;
+            var mode = g.CompositingMode;
+            var interpolation = g.InterpolationMode;
+            var offset = g.PixelOffsetMode;
+            g.CompositingMode = CompositingMode.SourceCopy;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(picture, part, part, GraphicsUnit.Pixel);
+            g.CompositingMode = mode;
+            g.InterpolationMode = interpolation;
+            g.PixelOffsetMode = offset;
         }
 
         // The window's backdrop, made once: the art filling the band from `top` (the header's edge) to `bottom` (the
@@ -136,6 +157,54 @@ namespace ExMoreStuff
         }
     }
 
+    // A picture drawn in a box (fitted, as Theme.Fit, or stretched), scaled once and kept until the picture or the box
+    // changes. A card's buttons and links each paint the card under them, so a scroll of Browse Mods scaled every picture
+    // several times a step and the list froze while it went (user 2026-11-19: "the scrollbar freezes").
+    sealed class FittedPicture : IDisposable
+    {
+        Image source;
+        Bitmap scaled;
+
+        public void Draw(Graphics g, Image image, RectangleF box, bool stretch = false)
+        {
+            if (image == null) return;
+            float scale = Math.Min(box.Width / image.Width, box.Height / image.Height);
+            float w = stretch ? box.Width : image.Width * scale, h = stretch ? box.Height : image.Height * scale;
+            var at = new Rectangle((int)Math.Round(box.X + (box.Width - w) / 2), (int)Math.Round(box.Y + (box.Height - h) / 2),
+                                   Math.Max(1, (int)Math.Round(w)), Math.Max(1, (int)Math.Round(h)));
+            if (scaled == null || source != image || scaled.Width != at.Width || scaled.Height != at.Height)
+            {
+                if (scaled != null) scaled.Dispose();
+                source = image;
+                scaled = new Bitmap(at.Width, at.Height, PixelFormat.Format32bppPArgb);
+                using (var s = Graphics.FromImage(scaled))
+                using (var attributes = new ImageAttributes())
+                {
+                    s.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    s.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    attributes.SetWrapMode(WrapMode.TileFlipXY);   // no faded edge
+                    s.DrawImage(image, new Rectangle(0, 0, at.Width, at.Height), 0, 0, image.Width, image.Height, GraphicsUnit.Pixel, attributes);
+                }
+            }
+            var interpolation = g.InterpolationMode;
+            var offset = g.PixelOffsetMode;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;   // one to one: a plain copy
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(scaled, at, 0, 0, at.Width, at.Height, GraphicsUnit.Pixel);
+            g.InterpolationMode = interpolation;
+            g.PixelOffsetMode = offset;
+        }
+
+        public void Dispose() { if (scaled != null) { scaled.Dispose(); scaled = null; } source = null; }
+    }
+
+    // A control whose face is one plain color in places (a card's lower part): what a control there sits on.
+    interface ISolidBelow
+    {
+        /// <summary>The color all of `bounds` (in this control) sits on, or null where it isn't one plain color.</summary>
+        Color? SolidUnder(Rectangle bounds);
+    }
+
     // A hand-drawn control the background shows through.
     class Clear : Control
     {
@@ -145,6 +214,21 @@ namespace ExMoreStuff
                      ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             BackColor = Color.Transparent;
             ForeColor = Theme.Text;
+        }
+
+        // On a plain color (ISolidBelow), that color is put straight in. Otherwise everything under it is painted again
+        // for it: the card it's on, and the art behind the card, for every button of every card on each step of a scroll
+        // (user 2026-11-19: Browse Mods "the scrollbar freezes").
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            var under = Parent as ISolidBelow;
+            Color? solid = under != null ? under.SolidUnder(Bounds) : null;
+            if (solid != null)
+            {
+                using (var brush = new SolidBrush(solid.Value)) e.Graphics.FillRectangle(brush, ClientRectangle);
+                return;
+            }
+            base.OnPaintBackground(e);
         }
 
         protected static void Smooth(Graphics g)
@@ -1097,6 +1181,7 @@ namespace ExMoreStuff
         public ScrollList()
         {
             glide.Tick += (s, e) => Glide();
+            warm.Tick += (s, e) => Warm();
             slider = new ListSlider(this);   // first: setting AutoScroll lays the list out already
             SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
             BackColor = Color.Transparent;
@@ -1104,7 +1189,10 @@ namespace ExMoreStuff
         }
 
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Theme.DarkScrollBars(Handle); }
-        protected override void OnScroll(ScrollEventArgs se) { Invalidate(true); base.OnScroll(se); slider.Follow(); }
+        /// <summary>Moved by the bar, the wheel or code (Browse Mods adds cards near the end).</summary>
+        public event EventHandler Scrolled;
+        void Moved() { var handler = Scrolled; if (handler != null) handler(this, EventArgs.Empty); }
+        protected override void OnScroll(ScrollEventArgs se) { HideView(); Invalidate(true); base.OnScroll(se); slider.Follow(); Moved(); }
         protected override void OnMouseWheel(MouseEventArgs e)
         {
             if (!VerticalScroll.Visible) { base.OnMouseWheel(e); return; }
@@ -1114,47 +1202,394 @@ namespace ExMoreStuff
         }
 
         /// <summary>A turn of the wheel (`delta` 120 a notch, a touchpad less): a glide that far.</summary>
-        public void Wheel(int delta)
+        public void Wheel(int delta) { GlideBy(-delta * WheelStep / 120, GlideMs); }
+
+        // A page glides too, a little slower than a notch as it goes further (user 2026-11-19: "make the page up and down
+        // buttons smoothly scroll, im making a video"): Page Up / Page Down, and a click on the bar above or below its thumb.
+        const int PageMs = 450;
+
+        /// <summary>A page up (-1) or down (1), gliding there; another during the glide adds to where it's going.</summary>
+        public void Page(int direction) { GlideBy(direction * VerticalScroll.LargeChange, PageMs); }
+
+        int glideMs = GlideMs;
+
+        void GlideBy(int by, int ms)
         {
-            int now = -AutoScrollPosition.Y;
+            int now = ShownY;
             glideFrom = now;
-            glideTo = Math.Max(0, Math.Min(Most, (glide.Enabled ? glideTo : now) - delta * WheelStep / 120));
+            glideTo = Math.Max(0, Math.Min(Most, (glide.Enabled ? glideTo : now) + by));
+            glideMs = ms;
+            // the cards it passes, as pictures, so the glide shows them moving (else it steps the list itself)
+            int height = ClientSize.Height;
+            if (shownY < 0 ? !StartView(Math.Min(now, glideTo), Math.Max(now, glideTo) + height) : !Shots(Math.Min(now, glideTo), Math.Max(now, glideTo) + height))
+                EndView();
             clock.Restart();
-            glide.Start();
+            Gliding(true);
+        }
+
+        // Windows' timer ticks about every 16 ms unless asked for finer; asked only while a glide goes, so its steps come
+        // evenly (a recording shows each)
+        [DllImport("winmm.dll")] static extern int timeBeginPeriod(int ms);
+        [DllImport("winmm.dll")] static extern int timeEndPeriod(int ms);
+        bool fine;
+
+        void Gliding(bool on)
+        {
+            if (on) glide.Start(); else glide.Stop();
+            if (on == fine) return;
+            fine = on;
+            try { if (on) timeBeginPeriod(1); else timeEndPeriod(1); } catch (Exception) { }
         }
 
         void Glide()
         {
-            double t = Math.Min(1, clock.Elapsed.TotalMilliseconds / GlideMs), left = 1 - t;
-            Place(glideFrom + (int)Math.Round((glideTo - glideFrom) * (1 - left * left * left)));
-            if (t >= 1) glide.Stop();
+            double t = Math.Min(1, clock.Elapsed.TotalMilliseconds / glideMs), left = 1 - t;
+            int y = glideFrom + (int)Math.Round((glideTo - glideFrom) * (1 - left * left * left));
+            if (shownY >= 0) ShowAt(y); else Place(y);
+            if (t >= 1) { Gliding(false); EndView(); }
+        }
+
+        // ---- Gliding smoothly (user 2026-11-19: Page Up / Page Down "not smooth it jumps a lot", for a video) ----
+        // Painting the list itself takes a card's every button, picture and line each step: Browse Mods managed about 20
+        // steps a second, so a glide showed a few jumps. So while it glides, a view over it shows each card as a picture
+        // made of it beforehand, moved over the art, many steps a second; when it stops, the list is put there for real
+        // under the view, and the view goes. A card's picture is made again when anything in it changes (Invalidated),
+        // and a few cards around where the list is are made while nothing else goes on (warm), so a glide starts at once.
+
+        GlideView view;
+        int shownY = -1;   // where the view shows the list (-1: the list shows itself)
+        readonly Dictionary<Control, Bitmap> shots = new Dictionary<Control, Bitmap>();
+        readonly HashSet<Control> watched = new HashSet<Control>();
+        readonly System.Windows.Forms.Timer warm = new System.Windows.Forms.Timer { Interval = 40 };
+        readonly BufferedGraphicsContext buffers = new BufferedGraphicsContext();   // its own, as a picture may be made while the view paints
+
+        /// <summary>Where the list shows from the top (during a glide, the view's place).</summary>
+        internal int ShownY { get { return shownY >= 0 ? shownY : -AutoScrollPosition.Y; } }
+
+        sealed class GlideView : Clear
+        {
+            readonly ScrollList list;
+            public GlideView(ScrollList list) { this.list = list; Visible = false; }
+            protected override void OnPaint(PaintEventArgs e) { list.PaintView(e.Graphics); }
+            protected override void OnMouseWheel(MouseEventArgs e) { list.Wheel(e.Delta); }
+        }
+
+        // drawn by us, or plain labels and pictures: painted piece by piece; any other control (the search box) is drawn
+        // whole by Windows (DrawToBitmap), except the few that can't be
+        static bool OwnDrawn(Control c) { return c is Clear || c is Label || c is PictureBox; }
+
+        // the cards (and what's in them) a picture can be made of
+        static bool Shootable(Control c)
+        {
+            if (c is RichTextBox || c is WebBrowserBase || c is ScrollList) return false;
+            if (!OwnDrawn(c)) return true;
+            foreach (Control child in c.Controls) if (child.Visible && !Shootable(child)) return false;
+            return true;
+        }
+
+        // a picture of `c` as it is now (its size too)
+        bool HasShot(Control c)
+        {
+            Bitmap shot;
+            return shots.TryGetValue(c, out shot) && shot.Width == Math.Max(1, c.Width) && shot.Height == Math.Max(1, c.Height);
+        }
+
+        // pictures of the cards from `top` to `bottom` (from the list's top) made; false: one can't be
+        bool Shots(int top, int bottom)
+        {
+            int at = -AutoScrollPosition.Y;
+            foreach (Control c in Controls)
+            {
+                if (!c.Visible || c.Bottom + at < top || c.Top + at > bottom) continue;
+                if (!Shootable(c)) return false;
+                if (!HasShot(c)) shots[c] = Shoot(c);
+            }
+            return true;
+        }
+
+        bool StartView(int top, int bottom)
+        {
+            if (!IsHandleCreated || !Visible || Parent == null || ClientSize.Width <= 0 || ClientSize.Height <= 0) return false;
+            if (!Shots(top, bottom)) return false;
+            if (view == null) view = new GlideView(this);
+            if (view.Parent != Parent) { if (view.Parent != null) view.Parent.Controls.Remove(view); Parent.Controls.Add(view); }
+            shownY = -AutoScrollPosition.Y;
+            view.Bounds = new Rectangle(Left, Top, ClientSize.Width, ClientSize.Height);
+            view.Visible = true;
+            view.BringToFront();
+            slider.BringToFront();
+            view.Update();
+            return true;
+        }
+
+        void ShowAt(int y)
+        {
+            shownY = Math.Max(0, Math.Min(Most, y));
+            view.Invalidate();
+            view.Update();
+            slider.Follow();
+            slider.Update();
+        }
+
+        // the list put where the view shows it, and the view gone
+        void EndView()
+        {
+            if (shownY < 0) return;
+            int y = shownY;
+            shownY = -1;
+            Place(y);   // painted under the view
+            view.Visible = false;
+            Update();
+            warm.Start();
+        }
+
+        void PaintView(Graphics g)
+        {
+            int at = -AutoScrollPosition.Y;
+            var interpolation = g.InterpolationMode;
+            var offset = g.PixelOffsetMode;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;   // one to one: plain copies
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            foreach (Control c in Controls)
+            {
+                if (!c.Visible) continue;
+                int y = c.Top + at - shownY;
+                if (y + c.Height < 0 || y > view.Height) continue;
+                Bitmap shot;
+                if (!HasShot(c)) { if (!Shootable(c)) continue; shots[c] = Shoot(c); }
+                shot = shots[c];
+                g.DrawImage(shot, new Rectangle(c.Left, y, shot.Width, shot.Height), 0, 0, shot.Width, shot.Height, GraphicsUnit.Pixel);
+            }
+            g.InterpolationMode = interpolation;
+            g.PixelOffsetMode = offset;
+        }
+
+        // A card as a picture the art can show through where it does (its rounded corners): painted twice, over black and
+        // over white, the difference giving how much shows through each pixel.
+        Bitmap Shoot(Control c)
+        {
+            Watch(c);
+            int w = Math.Max(1, c.Width), h = Math.Max(1, c.Height), n = w * h;
+            var black = new int[n];
+            var white = new int[n];
+            foreach (bool onWhite in new[] { false, true })
+                using (var canvas = new Bitmap(w, h, PixelFormat.Format32bppRgb))
+                {
+                    using (var g = Graphics.FromImage(canvas)) g.Clear(onWhite ? Color.White : Color.Black);
+                    PaintOver(canvas, c, Point.Empty);
+                    var data = canvas.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
+                    Marshal.Copy(data.Scan0, onWhite ? white : black, 0, n);
+                    canvas.UnlockBits(data);
+                }
+            for (int i = 0; i < n; i++)
+            {
+                int b = black[i], wt = white[i];
+                int r = (b >> 16) & 255, gr = (b >> 8) & 255, bl = b & 255;
+                int through = (((wt >> 16) & 255) - r + ((wt >> 8) & 255) - gr + (wt & 255) - bl) / 3;
+                int a = Math.Max(Math.Max(r, gr), Math.Max(bl, 255 - Math.Max(0, Math.Min(255, through))));
+                black[i] = (a << 24) | (r << 16) | (gr << 8) | bl;   // over black: already times its own opacity
+            }
+            var shot = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+            var into = shot.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+            Marshal.Copy(black, 0, into.Scan0, n);
+            shot.UnlockBits(into);
+            return shot;
+        }
+
+        // `c` painted over what `canvas` holds, its top left at `at`: each control on a piece of its own (text is drawn by
+        // Windows, which ignores a moved origin), its own controls over it, back to front
+        void PaintOver(Bitmap canvas, Control c, Point at)
+        {
+            int w = Math.Max(1, c.Width), h = Math.Max(1, c.Height);
+            using (var piece = new Bitmap(w, h, PixelFormat.Format32bppRgb))
+            {
+                // drawn in a buffer like the one a control paints into on screen (in a plain picture Windows' text came out
+                // heavier: dark text on the orange Install button), then copied into the piece
+                using (var screen = Graphics.FromHwnd(Handle))
+                using (var buffer = buffers.Allocate(screen, new Rectangle(0, 0, w, h)))
+                {
+                    var g = buffer.Graphics;
+                    g.CompositingMode = CompositingMode.SourceCopy;
+                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    g.PixelOffsetMode = PixelOffsetMode.Half;
+                    g.DrawImage(canvas, new Rectangle(0, 0, w, h), at.X, at.Y, w, h, GraphicsUnit.Pixel);
+                    g.CompositingMode = CompositingMode.SourceOver;
+                    g.InterpolationMode = InterpolationMode.Default;
+                    g.PixelOffsetMode = PixelOffsetMode.Default;
+                    if (OwnDrawn(c))
+                    {
+                        var under = c.Parent as ISolidBelow;
+                        Color? solid = c is Clear && under != null ? under.SolidUnder(c.Bounds) : null;
+                        if (solid == null && !(c is Clear) && c.BackColor.A == 255) solid = c.BackColor;
+                        if (solid != null) using (var brush = new SolidBrush(solid.Value)) g.FillRectangle(brush, 0, 0, w, h);
+                        InvokePaint(c, new PaintEventArgs(g, new Rectangle(0, 0, w, h)));
+                    }
+                    else using (var whole = new Bitmap(w, h, PixelFormat.Format32bppArgb))
+                    {
+                        c.DrawToBitmap(whole, new Rectangle(0, 0, w, h));   // with what's in it
+                        g.DrawImage(whole, new Rectangle(0, 0, w, h), 0, 0, w, h, GraphicsUnit.Pixel);
+                    }
+                    using (var into = Graphics.FromImage(piece)) buffer.Render(into);
+                }
+                if (OwnDrawn(c))
+                    for (int i = c.Controls.Count - 1; i >= 0; i--)
+                        if (c.Controls[i].Visible) PaintOver(piece, c.Controls[i], c.Controls[i].Location);
+                using (var g = Graphics.FromImage(canvas))
+                {
+                    g.CompositingMode = CompositingMode.SourceCopy;
+                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                    g.PixelOffsetMode = PixelOffsetMode.Half;
+                    g.DrawImage(piece, new Rectangle(at.X, at.Y, w, h), 0, 0, w, h, GraphicsUnit.Pixel);
+                }
+            }
+        }
+
+        // a card's picture dropped when it or anything in it is painted anew or gets a new control
+        void Watch(Control c)
+        {
+            if (!watched.Add(c)) return;
+            c.Invalidated += (s, e) => Drop(c);
+            c.ControlAdded += (s, e) => { Drop(c); Watch(e.Control); };
+            foreach (Control child in c.Controls) Watch(child);
+        }
+
+        // set while the list moves its cards (scrolled, or laid out again): a card the art shows through marks itself to be
+        // painted again when moved, though nothing in it changed, so its picture is kept
+        bool moving;
+
+        void Drop(Control c)
+        {
+            if (moving) return;
+            while (c != null && c.Parent != this) c = c.Parent;
+            Bitmap shot;
+            if (c == null || !shots.TryGetValue(c, out shot)) return;
+            shots.Remove(c);
+            if (shownY < 0) shot.Dispose();   // not while the view may still draw it this step
+            if (!warm.Enabled && shownY < 0) warm.Start();
+        }
+
+        // while nothing else goes on: a picture of a card near where the list is (two screens above, three below: a Page Up
+        // or Down, or two, starts at once), one at a time;
+        // the ones far away let go
+        void Warm()
+        {
+            if (shownY >= 0 || glide.Enabled) return;
+            if (!IsHandleCreated || !Visible || !VerticalScroll.Visible) { warm.Stop(); return; }
+            int at = -AutoScrollPosition.Y, height = ClientSize.Height;
+            foreach (var far in shots.Where(p => p.Key.IsDisposed || p.Key.Parent != this || p.Key.Bottom < -3 * height || p.Key.Top > 4 * height).ToList())
+            {
+                shots.Remove(far.Key);
+                far.Value.Dispose();
+            }
+            foreach (Control c in Controls)
+                if (c.Visible && c.Bottom >= -2 * height && c.Top <= 3 * height && !HasShot(c) && Shootable(c))
+                {
+                    shots[c] = Shoot(c);
+                    return;
+                }
+            warm.Stop();
+        }
+
+        protected override void OnControlAdded(ControlEventArgs e) { base.OnControlAdded(e); if (!warm.Enabled) warm.Start(); }
+        protected override void OnControlRemoved(ControlEventArgs e)
+        {
+            base.OnControlRemoved(e);
+            Bitmap shot;
+            if (shots.TryGetValue(e.Control, out shot)) { shots.Remove(e.Control); if (shownY < 0) shot.Dispose(); }
+        }
+
+        /// <summary>The list Page Up / Page Down move in `root` (MainForm): of those showing with more than fits, the
+        /// innermost one under the pointer, else the biggest.</summary>
+        public static ScrollList Showing(Control root)
+        {
+            var lists = new List<ScrollList>();
+            var open = new Stack<Control>();
+            open.Push(root);
+            while (open.Count > 0)
+                foreach (Control c in open.Pop().Controls)
+                {
+                    if (!c.Visible) continue;
+                    var list = c as ScrollList;
+                    if (list != null && list.VerticalScroll.Visible) lists.Add(list);
+                    open.Push(c);
+                }
+            Point pointer = Cursor.Position;
+            Func<ScrollList, int> area = l => l.Width * l.Height;
+            return lists.Where(l => l.RectangleToScreen(l.ClientRectangle).Contains(pointer)).OrderBy(area).FirstOrDefault()
+                   ?? lists.OrderByDescending(area).FirstOrDefault();
         }
 
         int Most { get { return Math.Max(0, VerticalScroll.Maximum - VerticalScroll.LargeChange + 1); } }
         protected override void OnParentChanged(EventArgs e) { base.OnParentChanged(e); slider.Follow(); }
         protected override void OnLocationChanged(EventArgs e) { base.OnLocationChanged(e); slider.Follow(); }
         protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); slider.Follow(); }
-        protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); slider.Follow(); }
-        protected override void OnLayout(LayoutEventArgs e) { base.OnLayout(e); slider.Follow(); }
+        protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); slider.Follow(); if (Visible && !warm.Enabled) warm.Start(); }
+        protected override void OnLayout(LayoutEventArgs e)
+        {
+            moving = true;
+            try { base.OnLayout(e); }
+            finally { moving = false; }
+            slider.Follow();
+        }
         protected override void OnPaint(PaintEventArgs e) { base.OnPaint(e); slider.Follow(); }   // scrolled from code too
 
         /// <summary>Scrolls to `y` (0 at the top), as dragging the bar does.</summary>
         public void ScrollTo(int y)
         {
-            glide.Stop();
+            Gliding(false);
+            HideView();
             Place(y);
         }
 
+        // the view gone at once, the list painting itself again where it is (the bar dragged during a glide)
+        void HideView()
+        {
+            if (shownY < 0) return;
+            shownY = -1;
+            view.Visible = false;
+        }
+
+        // Moving the list makes Windows copy what's on screen up or down and paint only the strip that comes in; with the
+        // background art showing through, and a drag of the bar sending moves faster than the paints came, the cards were
+        // left smeared in strips (user 2026-11-19: Browse Mods "screen tearing" while scrolling). So the copy is never
+        // shown: drawing is held while the list moves, then all of it is painted at once, there and then.
+        [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, int message, IntPtr w, IntPtr l);
+        [DllImport("user32.dll")] static extern bool RedrawWindow(IntPtr window, IntPtr rect, IntPtr region, int flags);
+        const int WM_SETREDRAW = 0x000B, RDW_INVALIDATE = 0x1, RDW_ERASE = 0x4, RDW_ALLCHILDREN = 0x80, RDW_UPDATENOW = 0x100, RDW_FRAME = 0x400;
+
         void Place(int y)
         {
-            AutoScrollPosition = new Point(-AutoScrollPosition.X, Math.Max(0, Math.Min(Most, y)));
-            Invalidate(true);
+            y = Math.Max(0, Math.Min(Most, y));
+            if (y != -AutoScrollPosition.Y)
+            {
+                bool shown = IsHandleCreated && Visible;
+                if (shown) SendMessage(Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
+                try { moving = true; AutoScrollPosition = new Point(-AutoScrollPosition.X, y); }
+                finally
+                {
+                    moving = false;
+                    if (shown)
+                    {
+                        SendMessage(Handle, WM_SETREDRAW, (IntPtr)1, IntPtr.Zero);
+                        RedrawWindow(Handle, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_FRAME);
+                    }
+                }
+            }
             slider.Follow();
+            slider.Update();   // its thumb along too, at once: a drag sends moves faster than paints came, so it stood still
+            Moved();
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { glide.Dispose(); slider.Dispose(); }
+            if (disposing)
+            {
+                Gliding(false);
+                glide.Dispose(); warm.Dispose(); slider.Dispose(); buffers.Dispose();
+                if (view != null) view.Dispose();
+                foreach (var shot in shots.Values) shot.Dispose();
+                shots.Clear();
+            }
             base.Dispose(disposing);
         }
     }
@@ -1176,7 +1611,7 @@ namespace ExMoreStuff
             var bar = list.VerticalScroll;
             int total = Math.Max(1, bar.Maximum + 1), most = Math.Max(1, bar.Maximum - bar.LargeChange + 1);
             height = Math.Max(36, Height * bar.LargeChange / total);
-            top = (int)((long)(Height - height) * Math.Min(bar.Value, most) / most);
+            top = (int)((long)(Height - height) * Math.Min(list.ShownY, most) / most);   // where a glide shows it
         }
 
         /// <summary>Keeps it over the list's scroll bar: there while the list scrolls, gone when it doesn't.</summary>
@@ -1198,9 +1633,9 @@ namespace ExMoreStuff
             }
             if (Visible != show) Visible = show;
             var bar = list.VerticalScroll;
-            if (bar.Value != shownValue || bar.Maximum != shownMax || bar.LargeChange != shownPage)
+            if (list.ShownY != shownValue || bar.Maximum != shownMax || bar.LargeChange != shownPage)
             {
-                shownValue = bar.Value; shownMax = bar.Maximum; shownPage = bar.LargeChange;
+                shownValue = list.ShownY; shownMax = bar.Maximum; shownPage = bar.LargeChange;
                 Invalidate();
             }
         }
@@ -1215,7 +1650,7 @@ namespace ExMoreStuff
             int top, height;
             Thumb(out top, out height);
             if (e.Y >= top && e.Y < top + height) { dragging = true; grab = e.Y - top; Capture = true; Invalidate(); return; }
-            list.ScrollTo(list.VerticalScroll.Value + (e.Y < top ? -1 : 1) * list.VerticalScroll.LargeChange);   // a page up or down
+            list.Page(e.Y < top ? -1 : 1);   // a page up or down, gliding
         }
 
         protected override void OnMouseMove(MouseEventArgs e)

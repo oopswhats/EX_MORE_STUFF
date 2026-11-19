@@ -785,6 +785,13 @@ namespace ExMoreStuff
             }
         }
 
+        /// <summary>Whether the docked file has music for `file` (its zip's list read, nothing unpacked).</summary>
+        public static bool Has(string zip, string file)
+        {
+            using (var archive = System.IO.Compression.ZipFile.OpenRead(zip))
+                return archive.Entries.Any(e => string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase));
+        }
+
         /// <summary>The song put there from the Music page, while the file is still what was put in; else null.</summary>
         public static InstalledSong Song(string zip, string file)
         {

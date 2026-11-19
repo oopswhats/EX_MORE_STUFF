@@ -5,6 +5,7 @@
 // an 18-byte end block (scale 0x8001, then 0x000E).
 using System;
 using System.IO;
+using System.Linq;
 
 namespace ExMoreStuff
 {
@@ -99,9 +100,17 @@ namespace ExMoreStuff
             return o;
         }
 
+        /// <summary>How far each sample aims past where the one before it missed (noise feedback; user 2026-11-19: The
+        /// Cursed Image "scratchy", the new encoder "way better"). The 4-bit steps' error is white, so on a bright song
+        /// (big steps) it's heard as grit in the mids; aiming each sample `Shape` times the last miss further makes the
+        /// error heard (1 - Shape z^-1) times that white one: about 8 dB quieter under 4 kHz and 4 dB under 8 kHz on that
+        /// song, a little more hiss at the very top, where the song's own cymbals hide it. The game's decoder is untouched.</summary>
+        public const double Shape = 0.8;
+
         /// <summary>A version-4 stream as the game's banks hold them (40-byte header, end block), started as CRI's
-        /// encoder does: each channel's history seeded with its first sample, written in the header.</summary>
-        public static byte[] Encode(short[] pcm, int channels, int rate)
+        /// encoder does: each channel's history seeded with its first sample, written in the header. `shape`: the noise
+        /// feedback (Shape; 0 is the plain encoder).</summary>
+        public static byte[] Encode(short[] pcm, int channels, int rate, double shape = Shape)
         {
             int n = pcm.Length / channels;
             var startHistory = new int[channels, 2];
@@ -126,6 +135,7 @@ namespace ExMoreStuff
             Buffer.BlockCopy(cri, 0, o, 0x22, 6);
             var h1 = new int[channels];
             var h2 = new int[channels];
+            var missed = new double[channels];
             for (int c = 0; c < channels && c < 2; c++) { h1[c] = startHistory[c, 0]; h2[c] = startHistory[c, 1]; }
             int p = 40;
             var block = new int[FrameSamples];
@@ -137,7 +147,7 @@ namespace ExMoreStuff
                         long idx = (long)(f * FrameSamples + s);
                         block[s] = idx < n ? pcm[idx * channels + c] : 0;
                     }
-                    EncodeFrame(block, c1, c2, ref h1[c], ref h2[c], o, p);
+                    EncodeFrame(block, c1, c2, shape, ref h1[c], ref h2[c], ref missed[c], o, p);
                 }
             // end block: scale 0x8001, 0x000E (the bytes that follow), zeros
             o[p] = 0x80; o[p + 1] = 0x01; o[p + 2] = 0x00; o[p + 3] = 0x0E;
@@ -145,8 +155,9 @@ namespace ExMoreStuff
         }
 
         // one frame: the scale from the open-loop prediction error, then closed loop (predicting from what the decoder
-        // will have), trying a few scales around it and keeping the one with the least error
-        static void EncodeFrame(int[] x, int c1, int c2, ref int h1, ref int h2, byte[] o, int p)
+        // will have), each sample aimed `shape` times the last miss past itself, trying a few scales around it and
+        // keeping the one with the least error (half what's heard, plus the miss; test\AdxShape.cs)
+        static void EncodeFrame(int[] x, int c1, int c2, double shape, ref int h1, ref int h2, ref double missed, byte[] o, int p)
         {
             int peak = 0, e1 = h1, e2 = h2;
             for (int s = 0; s < FrameSamples; s++)
@@ -157,32 +168,36 @@ namespace ExMoreStuff
                 e2 = e1; e1 = x[s];
             }
             int baseScale = Math.Max(1, (peak + 6) / 7);
-            long bestErr = long.MaxValue;
+            double bestErr = double.MaxValue, bestMissed = missed;
             int bestScale = baseScale, bh1 = h1, bh2 = h2;
             var nibs = new int[FrameSamples];
             var best = new int[FrameSamples];
-            foreach (int scale in new[] { baseScale, baseScale + baseScale / 8 + 1, baseScale + baseScale / 4 + 1, Math.Max(1, baseScale - baseScale / 8) })
+            foreach (int scale in new[] { baseScale, baseScale + baseScale / 8 + 1, baseScale + baseScale / 4 + 1, baseScale + baseScale / 2 + 1, Math.Max(1, baseScale - baseScale / 8) })
             {
                 if (scale > 0x7FFF) continue;
                 int a1 = h1, a2 = h2;
-                long err = 0;
+                double m = missed, err = 0, most = scale * 1.5;   // the miss carried on is held to 1.5 steps, so an overloaded step can't run away
                 for (int s = 0; s < FrameSamples; s++)
                 {
                     int pred = (c1 * a1 + c2 * a2) >> 12;
-                    int q = (int)Math.Round((x[s] - pred) / (double)scale);
+                    double aim = x[s] + shape * m;
+                    int q = (int)Math.Round((aim - pred) / scale);
                     q = q < -8 ? -8 : q > 7 ? 7 : q;
                     int v = q * scale + pred;
                     v = v < -32768 ? -32768 : v > 32767 ? 32767 : v;
-                    err += (long)(x[s] - v) * (x[s] - v);
+                    m = aim - v;
+                    if (m > most) m = most; else if (m < -most) m = -most;
+                    double heard = x[s] - v;
+                    err += heard * heard * 0.5 + m * m;
                     nibs[s] = q;
                     a2 = a1; a1 = v;
                 }
-                if (err < bestErr) { bestErr = err; bestScale = scale; bh1 = a1; bh2 = a2; Array.Copy(nibs, best, FrameSamples); }
+                if (err < bestErr) { bestErr = err; bestScale = scale; bh1 = a1; bh2 = a2; bestMissed = m; Array.Copy(nibs, best, FrameSamples); }
             }
             o[p] = (byte)(bestScale >> 8); o[p + 1] = (byte)bestScale;
             for (int s = 0; s < FrameSamples; s += 2)
                 o[p + 2 + s / 2] = (byte)((best[s] & 15) << 4 | (best[s + 1] & 15));
-            h1 = bh1; h2 = bh2;
+            h1 = bh1; h2 = bh2; missed = bestMissed;
         }
 
         static void Put32(byte[] b, int o, int v) { b[o] = (byte)(v >> 24); b[o + 1] = (byte)(v >> 16); b[o + 2] = (byte)(v >> 8); b[o + 3] = (byte)v; }
